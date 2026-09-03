@@ -1,0 +1,24 @@
+{
+  "name": "@ecc/config",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared configuration: TypeScript, ESLint, Prettier.",
+  "license": "UNLICENSED",
+  "files": [
+    "eslint.base.cjs",
+    "eslint.node.cjs",
+    "eslint.browser.cjs",
+    "eslint.react.cjs",
+    "tsconfig.base.json",
+    "tsconfig.node.json",
+    "tsconfig.browser.json",
+    "tsconfig.react-native.json"
+  ],
+  "scripts": {
+    "lint": "echo \"(no lint)\" && exit 0",
+    "typecheck": "echo \"(no typecheck)\" && exit 0",
+    "test": "echo \"(no test)\" && exit 0",
+    "build": "echo \"(no build)\" && exit 0",
+    "clean": "rm -rf node_modules"
+  }
+}

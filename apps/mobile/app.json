@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "Elderly Care",
+    "slug": "elderly-care",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "scheme": "ecc",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#F7F6F2"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.ecc"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F7F6F2"
+      },
+      "package": "com.example.ecc"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "apiBaseUrl": "http://localhost:3000"
+    }
+  }
+}
