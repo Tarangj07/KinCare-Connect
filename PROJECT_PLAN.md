@@ -62,7 +62,7 @@ Implemented in this priority order. Each row is a phase gate.
 | ----- | ---------------------------------------------------------------------------------------------- | -------- |
 | 0     | Repo audit + baseline docs (this file, ARCHITECTURE, THREAT_MODEL, SECURITY)                   | **DONE** |
 | 1     | Monorepo foundation (pnpm workspace, Turborepo, ESLint/Prettier, tsconfig, Docker Compose)     | **DONE** |
-| 2     | Database schema (Prisma) + initial migration + seed data scaffold                              | pending  |
+| 2     | Database schema (Prisma) + initial migration + seed data scaffold                              | **DONE** |
 | 3     | Auth + RBAC (register, login, refresh, logout, password reset, email-verify stub, lockout)     | pending  |
 | 4     | Senior profiles + care circles (invite/remove, role per circle, audit)                         | pending  |
 | 5     | Medication management (CRUD, schedule generator, dose instances, adherence recording)         | pending  |
@@ -210,4 +210,68 @@ These are deferred until the relevant phase rather than blocking Phase 1.
     `unsafe-inline`, explicit `connect-src`) lands in Phase 16.
   * No CI workflow yet — that is Phase 19.
 * **Next recommended phase:** Phase 2 — Database schema + Prisma.
+
+### Phase 2 — Database schema + Prisma (completed)
+* Prisma 5.22 schema with **37 tables** covering the full MVP
+  domain (identity, tenancy, seniors, care circles, medications,
+  appointments, care tasks, health measurements, documents, family
+  feed, messaging, notifications, emergency alerts, audit log,
+  consent, invitations, subscriptions).
+* **Ownership model:** `SeniorProfile` is the care-relevant entity;
+  `User` is the login identity (1:1 optional via `User.seniorProfileId`).
+  A senior without a login is fully supported.
+* **Tenancy:** row-level multi-tenancy via nullable `organizationId`
+  on all tenant-scoped tables; `NULL` = private family.
+* **Authorization backbone:** `CareCircleMember` with `CircleRole`
+  (`FAMILY_ADMIN`, `FAMILY_MEMBER`, `CAREGIVER`, `DOCTOR`, `OBSERVER`)
+  is the single ACL for senior-scoped access. `FAMILY_ADMIN` is
+  per-circle; `SUPER_ADMIN` is global and only for `/admin/*`.
+* **Medication adherence:** three-layer model
+  `Medication` → `MedicationSchedule` → `MedicationDose` (unique
+  per `medicationId + scheduledAt`). Doses carry `DoseStatus`
+  (`PENDING`/`TAKEN`/`SKIPPED`/`MISSED`/`SNOOZED`).
+* **Health measurements:** flexible JSONB `value` with
+  `HealthMeasurementType.schema` (`scalar` or `compound` for
+  blood pressure). 5 built-in types seeded (BP, HR, glucose, SpO2,
+  weight).
+* **Documents:** metadata only (`storageKey`, `contentHash`,
+  `scanStatus`); binaries in MinIO. `DocumentAccess` for additive
+  grants beyond care-circle membership.
+* **Emergency alerts:** state machine (`DETECTED` → `ACKNOWLEDGED`
+  → `ESCALATED` / `RESOLVED` / `FALSE_ALARM`) with de-dup via
+  `(seniorId, source, externalId)`.
+* **Consent:** first-class records with `scope`, `grantedAt`,
+  `expiresAt`, `revokedAt`, `revocationReason`.
+* **Audit log:** append-oriented, no UPDATE/DELETE for app role
+  (enforced by grants in Phase 16). Tracks actor, action, resource,
+  metadata, requestId, IP, UA.
+* **Indexes:** 23 composite/partial indexes for senior lookups,
+  care-circle membership, medication dose dates, appointments,
+  tasks, measurements, notifications, audit events.
+* **Deletion:** soft delete on 6 tables (`User`, `SeniorProfile`,
+  `Medication`, `Appointment`, `CareTask`, `HealthDocument`);
+  CASCADE on child-owned entities; RESTRICT/SET NULL where data
+  integrity requires it.
+* **Prisma setup:** `PrismaModule` + `PrismaService` wired into
+  NestJS. Health endpoint now probes DB (`phase: 2`).
+* **Migration:** `20260904042815_init` (enables `pgcrypto` +
+  creates all 37 tables + indexes + enums). Verified reproducible
+  via `migrate reset --force` → `migrate deploy` → `db seed`.
+* **Seed:** deterministic, idempotent, 6 demo users, 1 senior,
+  1 org, 1 care circle, 2 meds, 15 doses, 2 appts, 3 tasks,
+  21 measurements, 3 notifications, 1 consent, 1 audit entry.
+* **Tests:** 2 unit + 4 DB integration (unique email, CASCADE
+  doses, SET NULL on senior profile, table presence).
+* **Phase 2 gate:** all four validations green + migration status
+  clean + DB reproducible + seed idempotent.
+* **Deviations from plan:**
+  * UUID v4 via `gen_random_uuid()` instead of v7 (no custom
+    function; acceptable for MVP).
+  * `HealthMeasurement.value` is JSONB (not split columns) to
+    support compound measurements without a wide table.
+  * `RefreshToken` table created now (Phase 3 will consume it).
+* **Documentation:** `docs/DATABASE.md` created with entity summary,
+  ownership/tenancy/authz models, index rationale, deletion
+  strategy, migration strategy, decisions, and validation checklist.
+* **Next recommended phase:** Phase 3 — Authentication + RBAC.
 

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "rootDir": ".",
+    "experimentalDecorators": false,
+    "emitDecoratorMetadata": false
+  },
+  "include": ["prisma/**/*.ts", "src/database/**/*.ts", "src/database/**/*.spec.ts"]
+}

@@ -17,9 +17,44 @@ exists, has tests, and is exercised by CI.
 
 ## 1. Implementation status
 
-Phase 0. The repository is empty. No code-level controls are in place
-yet. The header documents are themselves part of the security
-posture: they record the decisions the code must implement.
+### Phase 0
+Repository was empty. No code-level controls in place.
+
+### Phase 1 — Monorepo foundation
+* `helmet` middleware with default CSP, HSTS, COOP, CORP,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
+* Request ID middleware (`x-request-id`) on every request.
+* Global exception filter mapping all errors to stable
+  `{ error: { code, message, requestId } }` shape; no stack traces.
+* Zod validation pipe configured to forbid unknown fields.
+* No secrets in source; `.env.example` lists all variables.
+
+### Phase 2 — Database schema + Prisma
+* **Schema design** enforces authorization at the data layer:
+  * `CareCircleMember` is the single ACL for senior-scoped access.
+  * `User.globalRole` does **not** grant senior access (except
+    `SUPER_ADMIN` for `/admin/*`).
+  * `organizationId` is nullable on all tenant-scoped tables;
+    `NULL` = private family.
+* **Soft delete** only where undelete is real product requirement
+  (User, SeniorProfile, Medication, Appointment, CareTask,
+  HealthDocument). Audit logs are **never** soft-deleted.
+* **CASCADE** on child-owned entities (doses, schedules, task
+  assignments, appointment participants, messages, document
+  accesses). **RESTRICT/SET NULL** where integrity requires it
+  (measurement types, uploader references).
+* **RefreshToken table** created with `tokenHash` (SHA-256),
+  `familyId` for rotation-chain revocation, `replacedById` for
+  reuse detection. Plaintext tokens are never persisted.
+* **No PHI in audit logs** — `AuditLog.metadata` is documented as
+  "do not place PHI or secrets here"; references by ID only.
+* **Indexes** for authorization queries: `(userId, status)`,
+  `(seniorId, status)` on `care_circle_members`; `(seniorId,
+  scheduledAt)` on `medication_doses`; `(actorUserId, createdAt)`
+  on `audit_logs`.
+* **Reproducibility:** migration `20260904042815_init` enables
+  `pgcrypto` and creates all 37 tables. Verified reproducible via
+  `migrate reset --force` → `migrate deploy` → `db seed`.
 
 ## 2. Planned controls
 

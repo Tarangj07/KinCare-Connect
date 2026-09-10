@@ -366,3 +366,64 @@ here so reviewers can see the current state of each major choice.
 | Error response shape  | `{ error: { code, message, requestId } }`  | Implemented via `GlobalExceptionFilter`. |
 | Local dev ports       | not specified                              | api `3000`, web `3001`, postgres `5433`, redis `6380`, minio `9000/9001`. |
 
+## 9. Phase 2 implementation notes
+
+| Concern                    | Planned                                             | Phase 2 implementation                                                 |
+| -------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- |
+| Database                   | PostgreSQL 16 + Prisma                              | PostgreSQL 16 + Prisma **5.22**                                        |
+| Migration tool             | Prisma Migrate                                      | Prisma Migrate (`migrate dev` / `migrate deploy`)                     |
+| ID strategy                | UUID v7 via `gen_random_uuid()`                     | UUID v4 via `gen_random_uuid()` (pgcrypto) — v7 deferred              |
+| Seed                       | Deterministic demo data                             | Deterministic, idempotent, 6 users / 1 senior / 1 org / 1 circle       |
+| Health measurements        | Flexible typed model                                | JSONB `value` + `HealthMeasurementType.schema` (scalar/compound)       |
+| Medication adherence       | Per-dose tracking                                   | 3-layer: `Medication` → `MedicationSchedule` → `MedicationDose`        |
+| Authorization ACL          | Care-circle membership                              | `CareCircleMember` with `CircleRole` enum (5 roles)                   |
+| Tenancy                    | Row-level `organizationId`                          | Nullable `organizationId` on all tenant tables; `NULL` = private       |
+| Audit log                  | Append-only                                         | `audit_logs` table + app-role `INSERT` only (grants Phase 16)         |
+| Consent                    | First-class records                                 | `Consent` with scope/granted/expires/revoked                          |
+| Emergency alerts           | State machine                                       | 5 states (`DETECTED`..`FALSE_ALARM`) + de-dup unique key              |
+| Documents                  | Metadata + S3                                       | `HealthDocument` (storageKey, hash, scanStatus) + `DocumentAccess`    |
+| Seed reproducibility       | From clean DB                                       | `migrate reset --force` → `migrate deploy` → `db seed` verified       |
+
+**Deviations from the planned stack:**
+
+* **UUID v4 instead of v7.** `gen_random_uuid()` is v4. v7 would
+  require a custom DB function; v4 is acceptable for MVP and does
+  not affect correctness.
+* **HealthMeasurement.value is JSONB.** A single JSONB column with
+  `HealthMeasurementType.schema` handles both scalar (HR, glucose)
+  and compound (BP systolic/diastolic) without a wide table.
+* **RefreshToken table created in Phase 2.** Phase 3 will consume
+  it; adding it now keeps migrations clean.
+
+**Open architectural questions (updated):**
+
+1. **Outbox vs. broker.** Phase 8 starts with the Postgres outbox.
+   If a real message broker becomes necessary, the `EventBus`
+   interface shields the rest of the system.
+2. **Schema-per-tenant vs. row-level multi-tenancy.** Default:
+   row-level. Revisit when the first paying organisation needs
+   data residency.
+3. **Symmetric vs. asymmetric JWT signing.** HS256 in dev. Phase 16
+   evaluates RS256 with KMS-managed keys.
+4. **Row-level security (RLS) policies.** Phase 16 will add RLS
+   policies so that the application role cannot cross the
+   organization boundary without an explicit join through
+   `OrganizationMembership`. The nullable `organizationId` on every
+   tenant table is the prerequisite.
+5. **Field-level encryption.** If PHI encryption-at-rest beyond
+   the managed Postgres provider's disk encryption is required,
+   Phase 16 will evaluate `pgp_sym_encrypt` columns and a
+   key-rotation strategy.
+
+**Known limitations:**
+
+* No RLS policies yet — the `organizationId` column exists but
+  is not enforced at the DB layer. Phase 16.
+* `AuditLog` is append-only in the schema; the application-role
+  grants (`INSERT` only) are applied in Phase 16.
+* Mobile vitest pipeline is a no-op. Adding the proper
+  Metro + `jest-expo` test runner is Phase 14 work.
+* `helmet`'s default CSP is shipped; a hardened CSP (no
+  `unsafe-inline`, explicit `connect-src`) lands in Phase 16.
+* No CI workflow yet — that is Phase 19.
+
