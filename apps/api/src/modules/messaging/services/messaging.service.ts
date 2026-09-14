@@ -52,6 +52,15 @@ export class MessagingService {
       where: { id: conversationId, seniorId, deletedAt: null },
     });
     if (!conversation) throw new NotFoundException('Conversation not found.');
+
+    // Verify targetUserId is a valid UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(targetUserId)) {
+      throw new ForbiddenException('Invalid targetUserId format.');
+    }
+
+    // Verify target user has ACTIVE CareCircle membership for this senior's care context
+    await this.authorizationService.assertCanAccessSenior(targetUserId, seniorId);
     const existing = await this.prisma.conversationParticipant.findFirst({
       where: { conversationId, userId: targetUserId, leftAt: null },
     });
@@ -75,6 +84,30 @@ export class MessagingService {
 
   async createMessage(seniorId: string, userId: string, conversationId: string, body: string, replyToId?: string) {
     await this.assertConversationAccess(userId, seniorId, conversationId);
+    const conversationState = await this.prisma.conversation.findFirst({
+      where: { id: conversationId, deletedAt: null },
+      select: { isClosed: true },
+    });
+    if (conversationState?.isClosed) {
+      throw new ForbiddenException('Conversation is closed. New messages are not allowed.');
+    }
+    if (replyToId) {
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(replyToId)) {
+        throw new ForbiddenException('Invalid replyToId format.');
+      }
+      const replyMessage = await this.prisma.message.findFirst({
+        where: {
+          id: replyToId,
+          conversationId,
+          deletedAt: null,
+          isDeleted: false,
+        },
+      });
+      if (!replyMessage) {
+        throw new ForbiddenException('Reply reference message not found or does not belong to this conversation.');
+      }
+    }
     const message = await this.prisma.message.create({
       data: {
         conversationId,
