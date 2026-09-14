@@ -9,6 +9,8 @@ import { FeedModule } from './modules/feed/feed.module';
 import { HealthModule } from './modules/health/health.module';
 import { MedicationModule } from './modules/medications/medication.module';
 import { MessagingModule } from './modules/messaging/messaging.module';
+import { DocumentsModule } from './modules/documents/documents.module';
+import { StorageModule } from './storage/storage.module';
 
 @Module({
   imports: [
@@ -24,6 +26,8 @@ import { MessagingModule } from './modules/messaging/messaging.module';
     FeedModule,
     MedicationModule,
     MessagingModule,
+    StorageModule,
+    DocumentsModule,
   ],
 })
 export class AppModule {}
