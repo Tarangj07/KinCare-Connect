@@ -145,13 +145,29 @@ All endpoints are prefixed with `/api/v1` (global prefix in `main.ts`).
 
 ## 15. Known Limitations
 
-- No malware scanning provider integrated; `scanStatus` remains `pending`.
+- - Pre-decode base64 size guard (`guardPreDecodeSize`) rejects obviously oversized base64 strings before `Buffer.from` allocation by comparing approximate decoded length against `MAX_FILE_SIZE_BYTES` (10 MB). Whitespace is stripped and padding is accounted for so the guard cannot be trivially bypassed.
+- Bounded content-signature validation (`inspectMagicBytes`) verifies magic bytes for PDF (`%PDF-`), PNG (`89504e...`), GIF (`GIF87a`/`GIF89a`), JPEG (`ffd8ff`), legacy DOC (`d0cf11e0`), and DOCX (`PK` / ZIP) formats. For formats without reliable signatures (`text/plain`), no signature is enforced; the file remains untrusted and `scanStatus` remains `pending`. No malware scanning provider is integrated; files are not claimed malware-free.
+- Storage path containment (`StorageService.resolveContainment`) resolves and verifies every storage key remains inside the configured base directory (`STORAGE_DIR` or default `uploads/`). Absolute paths, `../`, and nested traversal sequences are rejected before filesystem access. Errors never expose filesystem paths.
+- Download response exposes only required fields (`id`, `title`, `contentType`, `fileName`, `fileContent`, `sizeBytes`, `createdAt`) and does not include internal database fields (`storageKey`, `contentHash`, `uploadedByUserId`, full relationships).
+- Grant concurrency is protected by a transaction that re-checks the existing grant before creation and handles Prisma unique-constraint violation (`P2002`) cleanly, preventing concurrent duplicate active grants.
+- Controller endpoints use `@Roles()` metadata (`FAMILY_ADMIN` / `DOCTOR` for create/revoke/archive) as defense-in-depth; service-level authorization remains mandatory so internal callers cannot bypass security.
+- Audit metadata (`document.created`, `document.downloaded`, `document.access_granted`, `document.access_revoked`, `document.archived`) contains only safe identifiers and metadata — never file contents, base64 payloads, filesystem paths, or scanning results.
+- Notification boundary (`NotificationService`) contains only safe identifiers (`documentId`, `seniorId`, `userId`, event kind) — no file contents or document metadata beyond the identifier. No notification functionality is added by `DocumentService`; `NotificationService` is available for future phases.
 - Storage uses filesystem (`uploads/`) rather than MinIO/S3 SDK (no S3 SDK installed). The `.env` includes S3/MinIO variables for future substitution; the `StorageService` interface supports it.
 - File upload uses base64 encoding (`fileContent` in DTO). A future phase could add multipart/form-data with `multer`.
-- Download returns a base64-encoded string in JSON rather than a binary stream; suitable for API consumers but could be optimized.
+- Download returns a base64-encoded string in JSON rather than a binary stream; this is a bounded LOW-level performance/DoS consideration because downloads are capped at 10 MB (`MAX_FILE_SIZE_BYTES`). No signed URLs or streaming architecture are introduced in this phase.
 - No OCR or AI document analysis (Phase 20 boundary).
 - No external EHR integrations.
 
 ## 16. Security Findings
 
-No critical security findings for Phase 12. The authorization model enforces circle-level and document-level checks at the service layer. Audit events contain only safe metadata. Storage keys are non-guessable. Malicious uploads are blocked by content-type allowlists and file-size limits. Client-provided identity fields are never trusted.
+Phase 12 security findings remediated:
+- F01 (HIGH) — `revokeGrant` lookup now binds `seniorId + documentId + grantId` to the same resource, preventing cross-senior authorization bypass.
+- F02 (MEDIUM) — Pre-decode base64 size guard (`guardPreDecodeSize`) rejects oversized strings before `Buffer.from` allocation.
+- F03 (MEDIUM) — Bounded magic-byte validation (`inspectMagicBytes`) checks binary signatures (PDF, PNG, GIF, JPEG, DOC, DOCX); files remain untrusted and `scanStatus` stays `pending`.
+- F04 (MEDIUM) — `grantAccess` uses a transaction with re-check and handles Prisma unique-constraint error (`P2002`) cleanly, preventing concurrent duplicate grants.
+- F05 (MEDIUM) — `StorageService` resolves every key against `baseDir` and rejects absolute paths and traversal sequences; errors never expose filesystem paths.
+- F06 (LOW) — Download response restricted to required fields only (`id`, `title`, `contentType`, `fileName`, `fileContent`, `sizeBytes`, `createdAt`); no internal database fields leaked.
+- F07 (LOW) — Base64 download overhead documented as bounded LOW-level performance/DoS concern (10 MB cap); no streaming redesign.
+- F08 (LOW) — `UploadDocumentDto` strengthened with length limits, base64 format checks, content-type allowlist validation, and null-byte/path traversal rejection for filenames.
+- F10 (LOW) — Controller endpoints use explicit `@Roles(...)` metadata (`FAMILY_ADMIN` / `DOCTOR` for create/revoke/archive) alongside mandatory service-level authorization.

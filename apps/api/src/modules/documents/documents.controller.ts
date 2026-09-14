@@ -6,6 +6,7 @@ import { Request } from 'express';
 
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
+import { Roles } from '../../auth/decorators/roles.decorator';
 import { AuthorizationService } from '../../auth/authorization.service';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { CreateAccessGrantDto } from './dto/access-grant.dto';
@@ -32,6 +33,7 @@ export class DocumentController {
   }
 
   @Post()
+  @Roles('FAMILY_ADMIN', 'FAMILY_MEMBER', 'CAREGIVER', 'DOCTOR')
   async upload(
     @Param('seniorId') seniorId: string,
     @Body() dto: UploadDocumentDto,
@@ -83,6 +85,7 @@ export class DocumentController {
   }
 
   @Post(':documentId/access')
+  @Roles('FAMILY_ADMIN', 'DOCTOR')
   async grantAccess(
     @Param('seniorId') seniorId: string,
     @Param('documentId') documentId: string,
@@ -106,6 +109,7 @@ export class DocumentController {
   }
 
   @Delete(':documentId/access/:grantId')
+  @Roles('FAMILY_ADMIN', 'DOCTOR')
   async revokeAccess(
     @Param('seniorId') seniorId: string,
     @Param('documentId') documentId: string,
@@ -118,6 +122,7 @@ export class DocumentController {
   }
 
   @Patch(':documentId/archive')
+  @Roles('FAMILY_ADMIN', 'DOCTOR')
   async archive(
     @Param('seniorId') seniorId: string,
     @Param('documentId') documentId: string,

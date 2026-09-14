@@ -20,6 +20,26 @@ export class StorageService {
     }
   }
 
+  private resolveContainment(storageKey: string): string {
+    // Normalize and resolve against baseDir, rejecting absolute paths and traversal
+    const safeKey = storageKey.replace(/\\/g, '/');
+    // Reject absolute paths
+    if (safeKey.startsWith('/')) {
+      throw new InternalServerErrorException('Storage access denied: invalid key');
+    }
+    // Reject any parent-directory traversal sequences in the raw key
+    if (safeKey.includes('../') || safeKey.includes('..\\') || safeKey === '..' || safeKey.endsWith('/..')) {
+      throw new InternalServerErrorException('Storage access denied: invalid key');
+    }
+    const targetPath = path.resolve(this.baseDir, safeKey);
+    const basePath = path.resolve(this.baseDir);
+    // Ensure target is within baseDir
+    if (!targetPath.startsWith(basePath + path.sep) && targetPath !== basePath) {
+      throw new InternalServerErrorException('Storage access denied: invalid key');
+    }
+    return targetPath;
+  }
+
   generateSafeKey(documentId: string, originalName: string): string {
     const random = crypto.randomBytes(16).toString('hex');
     const ext = path.extname(originalName) || '';
@@ -27,7 +47,7 @@ export class StorageService {
   }
 
   async upload(fileBuffer: Buffer, storageKey: string, contentType: string): Promise<StorageObject> {
-    const targetPath = path.join(this.baseDir, storageKey);
+    const targetPath = this.resolveContainment(storageKey);
     const dir = path.dirname(targetPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -43,7 +63,7 @@ export class StorageService {
   }
 
   async retrieve(storageKey: string): Promise<Buffer> {
-    const targetPath = path.join(this.baseDir, storageKey);
+    const targetPath = this.resolveContainment(storageKey);
     if (!fs.existsSync(targetPath)) {
       throw new InternalServerErrorException('Storage object not found');
     }
@@ -51,14 +71,15 @@ export class StorageService {
   }
 
   async delete(storageKey: string): Promise<void> {
-    const targetPath = path.join(this.baseDir, storageKey);
+    const targetPath = this.resolveContainment(storageKey);
     if (fs.existsSync(targetPath)) {
       fs.unlinkSync(targetPath);
     }
   }
 
   async exists(storageKey: string): Promise<boolean> {
-    return fs.existsSync(path.join(this.baseDir, storageKey));
+    const targetPath = this.resolveContainment(storageKey);
+    return fs.existsSync(targetPath);
   }
 
   computeHash(buffer: Buffer): string {

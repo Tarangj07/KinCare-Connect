@@ -23,6 +23,84 @@ export class DocumentService {
     private readonly storageService: StorageService,
   ) {}
 
+  private guardPreDecodeSize(base64String: string): void {
+    // Basic base64 format validation before size estimation
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64String.replace(/\s/g, ''))) {
+      throw new ForbiddenException('File content is not valid base64.');
+    }
+    // Remove whitespace to get actual base64 length
+    const trimmed = base64String.replace(/\s/g, '');
+    // Base64 length: each 4 chars -> 3 bytes. Account for padding.
+    // A safe upper-bound: if trimmed length exceeds (MAX * 4/3) + 32 padding/slack, reject.
+    const maxBase64Length = Math.ceil((MAX_FILE_SIZE_BYTES * 4) / 3) + 32;
+    if (trimmed.length > maxBase64Length) {
+      throw new ForbiddenException('File base64 exceeds maximum allowed size before decode.');
+    }
+    // Additional check: approximate decoded size
+    const approximateDecoded = Math.floor((trimmed.length * 3) / 4) - (trimmed.endsWith('==') ? 2 : trimmed.endsWith('=') ? 1 : 0);
+    if (approximateDecoded > MAX_FILE_SIZE_BYTES) {
+      throw new ForbiddenException('File exceeds maximum size of 10MB.');
+    }
+  }
+
+  private inspectMagicBytes(fileBuffer: Buffer, contentType: string): void {
+    const firstBytes = fileBuffer.slice(0, 8);
+    const hex = firstBytes.toString('hex');
+    const pngHeader = '89504e470d0a1a0a';
+    const gif87a = '474946383761';
+    const gif89a = '474946383961';
+    const jpeg = 'ffd8ff';
+    const pdf = '255044462d'; // %PDF-
+    const docLegacy = 'd0cf11e0'; // legacy DOC/OLE2 header
+
+    if (contentType === 'application/pdf') {
+      if (!hex.startsWith(pdf)) {
+        throw new ForbiddenException('File content does not match PDF signature.');
+      }
+      return;
+    }
+
+    if (contentType === 'image/png') {
+      if (!hex.startsWith(pngHeader)) {
+        throw new ForbiddenException('File content does not match PNG signature.');
+      }
+      return;
+    }
+
+    if (contentType === 'image/gif') {
+      if (!hex.startsWith(gif87a) && !hex.startsWith(gif89a)) {
+        throw new ForbiddenException('File content does not match GIF signature.');
+      }
+      return;
+    }
+
+    if (contentType === 'image/jpeg') {
+      // JPEG starts with ffd8ff; allow variations in first 3 bytes after header
+      if (!hex.startsWith(jpeg)) {
+        throw new ForbiddenException('File content does not match JPEG signature.');
+      }
+      return;
+    }
+
+    if (contentType === 'application/msword' || contentType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      // Legacy DOC uses OLE2 header d0cf11e0; .docx is a ZIP-based format with PK header
+      if (contentType === 'application/msword' && !hex.startsWith(docLegacy)) {
+        throw new ForbiddenException('File content does not match DOC signature.');
+      }
+      // For .docx, check ZIP header (PK) at start
+      if (contentType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        const zipHeader = '504b0304';
+        if (!hex.startsWith(zipHeader)) {
+          throw new ForbiddenException('File content does not match DOCX (ZIP) signature.');
+        }
+      }
+      return;
+    }
+
+    // For text/plain, no reliable binary signature; boundary preserved: untrusted, no malware claim.
+    // For other types, no signature enforced but still untrusted.
+  }
+
   private validateFile(fileName: string, contentType: string, fileBuffer: Buffer): void {
     if (!ALLOWED_CONTENT_TYPES.includes(contentType)) {
       throw new ForbiddenException(`Content type ${contentType} is not allowed.`);
@@ -30,6 +108,7 @@ export class DocumentService {
     if (fileBuffer.length > MAX_FILE_SIZE_BYTES) {
       throw new ForbiddenException(`File exceeds maximum size of ${MAX_FILE_SIZE_BYTES} bytes.`);
     }
+    this.inspectMagicBytes(fileBuffer, contentType);
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
     const expectedExt = contentType.split('/').pop() || '';
     if (contentType.startsWith('image/')) {
@@ -72,6 +151,7 @@ export class DocumentService {
     if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER' && role !== 'CAREGIVER' && role !== 'DOCTOR') {
       throw new ForbiddenException('Insufficient privileges to upload documents for this senior.');
     }
+    this.guardPreDecodeSize(data.fileContent);
     const fileBuffer = Buffer.from(data.fileContent, 'base64');
     this.validateFile(data.fileName, data.contentType, fileBuffer);
     const safeKey = this.storageService.generateSafeKey(seniorId, data.fileName);
@@ -158,7 +238,15 @@ export class DocumentService {
         metadata: { title: doc.title, contentType: doc.contentType, sizeBytes: fileBuffer.length },
       },
     });
-    return { document: doc, fileContent: fileBuffer.toString('base64'), contentType: doc.contentType, fileName: doc.title + (doc.contentType.startsWith('image/') ? '.png' : '.pdf') };
+    return {
+      id: doc.id,
+      title: doc.title,
+      contentType: doc.contentType,
+      fileName: doc.title + (doc.contentType.startsWith('image/') ? '.png' : '.pdf'),
+      fileContent: fileBuffer.toString('base64'),
+      sizeBytes: Number(doc.sizeBytes),
+      createdAt: doc.createdAt,
+    };
   }
 
   async archiveDocument(seniorId: string, documentId: string, userId: string) {
@@ -208,27 +296,54 @@ export class DocumentService {
     if (existing) {
       throw new ForbiddenException('Access grant already exists for this user.');
     }
-    const grant = await this.prisma.documentAccess.create({
-      data: {
-        documentId,
-        userId: targetUserId,
-        seniorId,
-        grantedByUserId: userId,
-        expiresAt: expiresAt ? new Date(expiresAt) : null,
-      },
-    });
-    await this.prisma.auditLog.create({
-      data: {
-        actorUserId: userId,
-        actorType: 'USER',
-        action: 'document.access_granted',
-        resourceType: 'document_access',
-        resourceId: grant.id,
-        seniorId,
-        metadata: { documentId, targetUserId, expiresAt: expiresAt || null },
-      },
-    });
-    return grant;
+    let grant;
+    try {
+      interface TransactionClient {
+        documentAccess: {
+          findFirst: (args: { where: { documentId: string; userId: string; deletedAt: null } }) => Promise<any>;
+          create: (args: { data: any }) => Promise<any>;
+        };
+      }
+      grant = await this.prisma.$transaction(async (tx: TransactionClient) => {
+        // Re-check inside transaction to catch concurrent insertion
+        const existingInTx = await tx.documentAccess.findFirst({
+          where: { documentId, userId: targetUserId, deletedAt: null },
+        });
+        if (existingInTx) {
+          throw new ForbiddenException('Access grant already exists for this user.');
+        }
+        return await tx.documentAccess.create({
+          data: {
+            documentId,
+            userId: targetUserId,
+            seniorId,
+            grantedByUserId: userId,
+            expiresAt: expiresAt ? new Date(expiresAt) : null,
+          },
+        });
+      });
+      await this.prisma.auditLog.create({
+        data: {
+          actorUserId: userId,
+          actorType: 'USER',
+          action: 'document.access_granted',
+          resourceType: 'document_access',
+          resourceId: grant.id,
+          seniorId,
+          metadata: { documentId, targetUserId, expiresAt: expiresAt || null },
+        },
+      });
+      return grant;
+    } catch (err) {
+      if (err instanceof ForbiddenException) {
+        throw err;
+      }
+      // Handle Prisma unique constraint violation (P2002) cleanly
+      if (err && typeof err === 'object' && 'code' in err && (err as any).code === 'P2002') {
+        throw new ForbiddenException('Access grant already exists for this user.');
+      }
+      throw err;
+    }
   }
 
   async listGrants(seniorId: string, documentId: string, userId: string) {
@@ -248,7 +363,9 @@ export class DocumentService {
     if (role !== 'FAMILY_ADMIN' && role !== 'DOCTOR') {
       throw new ForbiddenException('Only FAMILY_ADMIN or DOCTOR can revoke document access.');
     }
-    const grant = await this.prisma.documentAccess.findFirst({ where: { id: grantId, documentId, deletedAt: null } });
+    const grant = await this.prisma.documentAccess.findFirst({
+      where: { id: grantId, documentId, seniorId, deletedAt: null },
+    });
     if (!grant) throw new NotFoundException('Access grant not found.');
     await this.prisma.documentAccess.update({
       where: { id: grantId },
