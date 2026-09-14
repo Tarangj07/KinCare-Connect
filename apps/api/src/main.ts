@@ -1,5 +1,6 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 
 import { AppModule } from './app.module';
@@ -9,10 +10,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
 
-  // Trust X-Forwarded-* headers only when behind a known proxy.
-  // The express instance is the default; we keep the default of 0 hops
-  // and document that the deployment platform must set trust proxy.
-
+  app.use(cookieParser());
   app.use(helmet());
   app.use(new RequestIdMiddleware().use);
 
