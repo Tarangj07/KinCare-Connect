@@ -10,6 +10,7 @@ import { HealthModule } from './modules/health/health.module';
 import { MedicationModule } from './modules/medications/medication.module';
 import { MessagingModule } from './modules/messaging/messaging.module';
 import { DocumentsModule } from './modules/documents/documents.module';
+import { EmergencyModule } from './modules/emergency/emergency.module';
 import { StorageModule } from './storage/storage.module';
 
 @Module({
@@ -28,6 +29,7 @@ import { StorageModule } from './storage/storage.module';
     MessagingModule,
     StorageModule,
     DocumentsModule,
+    EmergencyModule,
   ],
 })
 export class AppModule {}

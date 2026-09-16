@@ -114,23 +114,27 @@ enum PostVisibility {
   PRIVATE
 }
 
-/// Emergency alert states. The state machine is documented in
-/// `docs/DATABASE.md` §6.
+enum EmergencyAlertType {
+  MEDICAL
+  FALL
+  SOS
+  MEDICATION
+  OTHER
+}
+
+/// Emergency alert states.
 enum EmergencyAlertStatus {
-  DETECTED
+  ACTIVE
   ACKNOWLEDGED
-  ESCALATED
   RESOLVED
-  FALSE_ALARM
+  CANCELLED
 }
 
 /// Emergency alert severity.
 enum EmergencyAlertSeverity {
-  INFO
-  LOW
-  MEDIUM
-  HIGH
   CRITICAL
+  HIGH
+  MEDIUM
 }
 
 /// Audit log actor types.
@@ -228,23 +232,27 @@ model User {
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   // Relations
-  seniorProfile              SeniorProfile?            @relation("UserIsSenior", fields: [seniorProfileId], references: [id], onDelete: SetNull)
-  organizationMemberships    OrganizationMembership[]
-  circleMemberships          CareCircleMember[]
-  circleMembershipsCreated   CareCircle[]              @relation("CircleCreatedBy")
-  refreshTokens              RefreshToken[]
-  invitationsIssued          Invitation[]              @relation("InvitationIssuedBy")
-  invitationsAccepted        Invitation[]              @relation("InvitationAcceptedBy")
-  documentsUploaded          HealthDocument[]
-  familyUpdatesPosted        FamilyUpdate[]
-  commentsPosted             Comment[]
-  messagesSent               Message[]
-  conversationParticipations ConversationParticipant[]
-  notifications              Notification[]
-  notificationPreferences    NotificationPreference[]
-  measurementsRecorded       HealthMeasurement[]
-  devicesOwned               HealthDevice[]            @relation("DeviceOwner")
-  caregiverProfile           CaregiverProfile?
+  seniorProfile               SeniorProfile?            @relation("UserIsSenior", fields: [seniorProfileId], references: [id], onDelete: SetNull)
+  organizationMemberships     OrganizationMembership[]
+  circleMemberships           CareCircleMember[]
+  circleMembershipsCreated    CareCircle[]              @relation("CircleCreatedBy")
+  refreshTokens               RefreshToken[]
+  invitationsIssued           Invitation[]              @relation("InvitationIssuedBy")
+  invitationsAccepted         Invitation[]              @relation("InvitationAcceptedBy")
+  documentsUploaded           HealthDocument[]
+  familyUpdatesPosted         FamilyUpdate[]
+  commentsPosted              Comment[]
+  messagesSent                Message[]
+  conversationParticipations  ConversationParticipant[]
+  notifications               Notification[]
+  notificationPreferences     NotificationPreference[]
+  measurementsRecorded        HealthMeasurement[]
+  devicesOwned                HealthDevice[]            @relation("DeviceOwner")
+  caregiverProfile            CaregiverProfile?
+  emergencyAlertsCreated      EmergencyAlert[]          @relation("AlertCreatedBy")
+  emergencyAlertsAcknowledged EmergencyAlert[]          @relation("AlertAcknowledgedBy")
+  emergencyAlertsResolved     EmergencyAlert[]          @relation("AlertResolvedBy")
+  emergencyAlertsCancelled    EmergencyAlert[]          @relation("AlertCancelledBy")
 
   @@index([globalRole])
   @@index([deletedAt])
@@ -1189,31 +1197,39 @@ model NotificationPreference {
 model EmergencyAlert {
   id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   seniorId             String                 @map("senior_id") @db.Uuid
-  /// Alert type key ("fall_detected", "missed_medication_window", "manual", …).
-  kind                 String
+  /// Alert type.
+  type                 EmergencyAlertType     @default(MEDICAL)
   severity             EmergencyAlertSeverity @default(MEDIUM)
-  status               EmergencyAlertStatus   @default(DETECTED)
-  /// Free-form message ("Possible fall detected in living room").
+  status               EmergencyAlertStatus   @default(ACTIVE)
+  /// Short description / message.
   message              String?                @db.Text
-  /// Source of the alert ("wearable", "manual", "system").
+  /// Source of the alert (e.g. wearable, manual, system).
   source               String
-  /// Time the alert was raised.
+  /// Time the alert event occurred.
   detectedAt           DateTime               @map("detected_at") @db.Timestamptz(6)
+  /// User who created/submitted the alert.
+  createdByUserId      String?                @map("created_by_user_id") @db.Uuid
   acknowledgedAt       DateTime?              @map("acknowledged_at") @db.Timestamptz(6)
   acknowledgedByUserId String?                @map("acknowledged_by_user_id") @db.Uuid
-  escalatedAt          DateTime?              @map("escalated_at") @db.Timestamptz(6)
+  /// User who resolved the alert.
+  resolvedByUserId     String?                @map("resolved_by_user_id") @db.Uuid
   resolvedAt           DateTime?              @map("resolved_at") @db.Timestamptz(6)
+  /// User who cancelled the alert.
+  cancelledByUserId    String?                @map("cancelled_by_user_id") @db.Uuid
+  cancelledAt          DateTime?              @map("cancelled_at") @db.Timestamptz(6)
+  /// Optional resolution note.
   resolution           String?                @map("resolution") @db.Text
-  /// External identifier (e.g. the device's event id), for de-dup.
+  /// External identifier for de-dup.
   externalId           String?                @map("external_id")
-  /// Arbitrary structured context (sensor reading, etc.). Do not
-  /// place PHI here without encryption.
-  context              Json?
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  senior SeniorProfile @relation(fields: [seniorId], references: [id], onDelete: Cascade)
+  senior         SeniorProfile @relation(fields: [seniorId], references: [id], onDelete: Cascade)
+  createdBy      User?         @relation("AlertCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  acknowledgedBy User?         @relation("AlertAcknowledgedBy", fields: [acknowledgedByUserId], references: [id], onDelete: SetNull)
+  resolvedBy     User?         @relation("AlertResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  cancelledBy    User?         @relation("AlertCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: SetNull)
 
   @@unique([seniorId, source, externalId])
   @@index([seniorId, status])
