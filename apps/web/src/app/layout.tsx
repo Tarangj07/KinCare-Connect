@@ -8,7 +8,7 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Elderly Care Coordination',
   description:
-    'A secure family and caregiver coordination platform for elderly relatives. Phase 1 — foundation.',
+    'A secure family and caregiver coordination platform for elderly relatives. Phase 15 — web dashboards.',
 };
 
 export const viewport: Viewport = {

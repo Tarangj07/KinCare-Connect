@@ -11,8 +11,7 @@ export default function HomePage(): ReactElement {
         <p className={styles.eyebrow}>Phase 1 · Foundation</p>
         <h1 className={styles.title}>Elderly Care Coordination</h1>
         <p className={styles.subtitle}>
-          A secure family and caregiver coordination platform. This page is the Phase 1 placeholder;
-          the real product lives in later phases.
+          A secure family and caregiver coordination platform. Phase 15 web dashboards are now available.
         </p>
         <ul className={styles.list}>
           <li>
@@ -25,7 +24,10 @@ export default function HomePage(): ReactElement {
             Review the threat model in <code>docs/THREAT_MODEL.md</code>.
           </li>
         </ul>
-        <Link className={styles.cta} href="/health">
+        <Link className={styles.cta} href="/dashboard">
+          Open Dashboard
+        </Link>
+        <Link className={styles.cta} href="/health" style={{ marginTop: '1rem', background: '#e08a3c' }}>
           Check API health
         </Link>
       </div>
