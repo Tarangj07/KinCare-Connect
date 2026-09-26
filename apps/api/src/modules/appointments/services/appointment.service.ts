@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { AuthorizationService } from '../../auth/authorization.service';
-import { PrismaService } from '../../database/prisma.service';
+import { AuthorizationService } from '../../../auth/authorization.service';
+import { PrismaService } from '../../../database/prisma.service';
 
 @Injectable()
 export class AppointmentService {
@@ -24,7 +24,7 @@ export class AppointmentService {
         title: data.title,
         providerName: data.providerName,
         location: data.location,
-        isTelehealth: data.isTelehealth === 'true' || data.isTelehealth === true,
+        isTelehealth: data.isTelehealth === 'true',
         startsAt,
         endsAt,
         status: (data.status as 'SCHEDULED' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW') ?? 'SCHEDULED',

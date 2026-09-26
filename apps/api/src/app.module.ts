@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 
+import { resolveJwtAccessSecret } from './config/security-config';
 import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './database/prisma.module';
 import { AppointmentModule } from './modules/appointments/appointment.module';
@@ -17,7 +18,7 @@ import { StorageModule } from './storage/storage.module';
   imports: [
     PrismaModule,
     JwtModule.register({
-      secret: process.env['JWT_ACCESS_SECRET'] ?? 'dev-secret-change-me',
+      secret: resolveJwtAccessSecret(),
       signOptions: { expiresIn: '15m' },
     }),
     AuthModule,

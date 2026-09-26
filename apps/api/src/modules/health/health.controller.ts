@@ -1,6 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 
-import type { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../database/prisma.service';
 
 interface DbStatus {
   status: 'ok' | 'error';

@@ -27,7 +27,7 @@ describe('Emergency Alert Integration', () => {
 
     const result = await api.get('/api/v1/seniors/test-id/emergency-alerts');
     expect(Array.isArray(result)).toBe(true);
-    expect((global.fetch as vi.Mock).mock.calls[0][0]).toContain('emergency-alerts');
+    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('emergency-alerts');
   });
 
   it('alert detail uses the selected alertId', async () => {
@@ -39,7 +39,7 @@ describe('Emergency Alert Integration', () => {
     } as Response);
 
     await api.get('/api/v1/seniors/s1/emergency-alerts/a1');
-    expect((global.fetch as vi.Mock).mock.calls[0][0]).toContain('/a1');
+    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('/a1');
   });
 
   it('acknowledge action calls the expected endpoint', async () => {
@@ -50,21 +50,21 @@ describe('Emergency Alert Integration', () => {
     } as Response);
 
     await api.post('/api/v1/seniors/s1/emergency-alerts/a1/acknowledge');
-    expect((global.fetch as vi.Mock).mock.calls[0][0]).toContain('acknowledge');
+    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('acknowledge');
   });
 
   it('resolve action calls the expected endpoint', async () => {
     const { api } = await import('../../services/api');
     global.fetch = vi.fn().mockResolvedValue({ ok: true, headers: new Headers({}) } as Response);
     await api.post('/api/v1/seniors/s1/emergency-alerts/a1/resolve');
-    expect((global.fetch as vi.Mock).mock.calls[0][0]).toContain('resolve');
+    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('resolve');
   });
 
   it('cancel action calls the expected endpoint', async () => {
     const { api } = await import('../../services/api');
     global.fetch = vi.fn().mockResolvedValue({ ok: true, headers: new Headers({}) } as Response);
     await api.post('/api/v1/seniors/s1/emergency-alerts/a1/cancel');
-    expect((global.fetch as vi.Mock).mock.calls[0][0]).toContain('cancel');
+    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('cancel');
   });
 
   it('terminal states do not expose inappropriate actions', async () => {
@@ -93,7 +93,7 @@ describe('Emergency Alert Integration', () => {
     try {
       await apiFetch('/api/v1/seniors/s1/emergency-alerts');
     } catch (e: unknown) {
-      const err = e as ApiError;
+      const err = e as InstanceType<typeof ApiError>;
       expect(err.status).toBe(403);
       expect(err.message).toBe('Request failed (403)');
     }

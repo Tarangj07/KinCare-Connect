@@ -2,13 +2,13 @@ import {
   Body, Controller, Delete, ForbiddenException, Get, NotFoundException,
   Param, Patch, Post, Req, UseGuards,
 } from '@nestjs/common';
-import { Request } from 'express';
+import type { Request } from 'express';
 
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { AuthorizationService } from '../../auth/authorization.service';
 import { FeedService } from './services/feed.service';
-import { CreateFeedUpdateDto } from './dto/create-update.dto';
+import { CreateFamilyUpdateDto } from './dto/create-update.dto';
 
 @Controller('seniors/:seniorId/feed')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -28,7 +28,7 @@ export class FeedController {
   @Post()
   async create(
     @Param('seniorId') seniorId: string,
-    @Body() dto: CreateFeedUpdateDto,
+    @Body() dto: CreateFamilyUpdateDto,
     @Req() req: Request,
   ) {
     await this.assertAccess(req, seniorId);
@@ -41,7 +41,7 @@ export class FeedController {
       body: dto.body,
       visibility: (dto.visibility as 'CIRCLE' | 'ORGANIZATION' | 'PRIVATE') ?? 'CIRCLE',
       kind: dto.kind ?? 'free_form',
-      relatedEntityType: dto.relatedEntityType,
+      relatedEntityType: dto.relatedEntityType as 'appointment' | 'medication' | 'care_task' | 'measurement' | undefined,
       relatedEntityId: dto.relatedEntityId,
     });
   }
@@ -73,7 +73,7 @@ export class FeedController {
   async update(
     @Param('seniorId') seniorId: string,
     @Param('updateId') updateId: string,
-    @Body() dto: Partial<CreateFeedUpdateDto>,
+    @Body() dto: Partial<CreateFamilyUpdateDto>,
     @Req() req: Request,
   ) {
     await this.assertAccess(req, seniorId);

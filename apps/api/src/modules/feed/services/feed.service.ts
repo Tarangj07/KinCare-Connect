@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { AuthorizationService } from '../../auth/authorization.service';
-import { PrismaService } from '../../database/prisma.service';
+import { AuthorizationService } from '../../../auth/authorization.service';
+import { PrismaService } from '../../../database/prisma.service';
 
 @Injectable()
 export class FeedService {
@@ -43,22 +43,45 @@ export class FeedService {
     return update;
   }
 
+  /**
+   * Phase 16 (H6/A4): PRIVATE posts are author-only. Previously the
+   * visibility column was only honoured if the client asked for it, so a
+   * "private" update was returned to every circle member (including
+   * OBSERVERs). CIRCLE and ORGANIZATION posts stay visible to circle
+   * members (organisation-scoped separation is not yet implemented).
+   */
+  private visibilityWhere(userId: string, requested?: 'CIRCLE' | 'ORGANIZATION' | 'PRIVATE') {
+    const and: Record<string, unknown>[] = [
+      { OR: [{ visibility: { not: 'PRIVATE' as const } }, { authorUserId: userId }] },
+    ];
+    if (requested) and.push({ visibility: requested });
+    return and;
+  }
+
   async findBySenior(seniorId: string, userId: string, visibility?: 'CIRCLE' | 'ORGANIZATION' | 'PRIVATE') {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
-    const where: Record<string, unknown> = { seniorId, deletedAt: null };
-    if (visibility) where.visibility = visibility;
+    const where: Record<string, unknown> = {
+      seniorId,
+      deletedAt: null,
+      AND: this.visibilityWhere(userId, visibility),
+    };
     return this.prisma.familyUpdate.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      include: { author: { select: { fullName: true, email: true } }, comments: { take: 3, orderBy: { createdAt: 'desc' }, include: { author: { select: { fullName: true } } } } },
+      include: { author: { select: { fullName: true } }, comments: { take: 3, orderBy: { createdAt: 'desc' }, include: { author: { select: { fullName: true } } } } },
     });
   }
 
   async findOne(seniorId: string, updateId: string, userId: string) {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
     const update = await this.prisma.familyUpdate.findFirst({
-      where: { id: updateId, seniorId, deletedAt: null },
-      include: { comments: { include: { author: { select: { fullName: true } } } }, author: { select: { fullName: true, email: true } } },
+      where: {
+        id: updateId,
+        seniorId,
+        deletedAt: null,
+        AND: this.visibilityWhere(userId),
+      },
+      include: { comments: { include: { author: { select: { fullName: true } } } }, author: { select: { fullName: true } } },
     });
     if (!update) throw new NotFoundException('Family update not found.');
     return update;

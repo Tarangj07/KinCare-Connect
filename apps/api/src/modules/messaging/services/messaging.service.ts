@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { AuthorizationService } from '../../auth/authorization.service';
-import { PrismaService } from '../../database/prisma.service';
+import { AuthorizationService } from '../../../auth/authorization.service';
+import { PrismaService } from '../../../database/prisma.service';
 
 @Injectable()
 export class MessagingService {
@@ -100,7 +100,6 @@ export class MessagingService {
         where: {
           id: replyToId,
           conversationId,
-          deletedAt: null,
           isDeleted: false,
         },
       });
@@ -128,16 +127,25 @@ export class MessagingService {
         metadata: { conversationId, replyToId: replyToId ?? null, hasBody: true },
       },
     });
-    // Notification event boundary: reference only IDs, never message body
-    await this.prisma.notification.create({
-      data: {
-        userId,
-        seniorId,
-        kind: 'messaging.new_message',
-        payload: { conversationId, messageId: message.id, senderUserId: userId },
-        channel: 'IN_APP',
-      },
+    // Notification event boundary: reference only IDs, never message body.
+    // Phase 16 (A22): notify the *other* active participants, not the
+    // sender — previously the row was addressed to the sender, so no
+    // recipient ever received anything.
+    const recipients = await this.prisma.conversationParticipant.findMany({
+      where: { conversationId, leftAt: null, userId: { not: userId } },
+      select: { userId: true },
     });
+    for (const recipient of recipients) {
+      await this.prisma.notification.create({
+        data: {
+          userId: recipient.userId,
+          seniorId,
+          kind: 'messaging.new_message',
+          payload: { conversationId, messageId: message.id, senderUserId: userId },
+          channel: 'IN_APP',
+        },
+      });
+    }
     return message;
   }
 
@@ -146,7 +154,7 @@ export class MessagingService {
     if (skip < 0) skip = 0;
     if (take > 100 || take < 1) take = 20;
     return this.prisma.message.findMany({
-      where: { conversationId, deletedAt: null, isDeleted: false },
+      where: { conversationId, isDeleted: false },
       orderBy: { createdAt: 'asc' },
       skip,
       take,

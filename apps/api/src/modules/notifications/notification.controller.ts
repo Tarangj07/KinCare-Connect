@@ -2,7 +2,7 @@ import {
   Body, Controller, Get, Patch, Delete, ForbiddenException,
   NotFoundException, UseGuards, Req, Param, Query,
 } from '@nestjs/common';
-import { Request } from 'express';
+import type { Request } from 'express';
 
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';

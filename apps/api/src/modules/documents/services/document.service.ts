@@ -1,8 +1,8 @@
 import * as crypto from 'crypto';
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
-import { AuthorizationService } from '../../auth/authorization.service';
-import { StorageService } from '../../storage/storage.service';
+import { PrismaService } from '../../../database/prisma.service';
+import { AuthorizationService } from '../../../auth/authorization.service';
+import { StorageService } from '../../../storage/storage.service';
 
 const ALLOWED_CONTENT_TYPES = [
   'application/pdf',
@@ -134,8 +134,7 @@ export class DocumentService {
         documentId,
         userId,
         seniorId: doc.seniorId,
-        deletedAt: null,
-        expiresAt: { gte: new Date() },
+        OR: [{ expiresAt: null }, { expiresAt: { gte: new Date() } }],
       },
     });
     return !!grant;
@@ -291,7 +290,7 @@ export class DocumentService {
       throw new ForbiddenException('Target user must have active care-circle membership for this senior.');
     }
     const existing = await this.prisma.documentAccess.findFirst({
-      where: { documentId, userId: targetUserId, deletedAt: null },
+      where: { documentId, userId: targetUserId },
     });
     if (existing) {
       throw new ForbiddenException('Access grant already exists for this user.');
@@ -300,14 +299,14 @@ export class DocumentService {
     try {
       interface TransactionClient {
         documentAccess: {
-          findFirst: (args: { where: { documentId: string; userId: string; deletedAt: null } }) => Promise<any>;
+          findFirst: (args: { where: { documentId: string; userId: string } }) => Promise<any>;
           create: (args: { data: any }) => Promise<any>;
         };
       }
       grant = await this.prisma.$transaction(async (tx: TransactionClient) => {
         // Re-check inside transaction to catch concurrent insertion
         const existingInTx = await tx.documentAccess.findFirst({
-          where: { documentId, userId: targetUserId, deletedAt: null },
+          where: { documentId, userId: targetUserId },
         });
         if (existingInTx) {
           throw new ForbiddenException('Access grant already exists for this user.');
@@ -351,8 +350,10 @@ export class DocumentService {
     const doc = await this.prisma.healthDocument.findFirst({ where: { id: documentId, seniorId, deletedAt: null } });
     if (!doc) throw new NotFoundException('Document not found.');
     return this.prisma.documentAccess.findMany({
-      where: { documentId, deletedAt: null },
-      include: { user: { select: { fullName: true, email: true } } },
+      where: { documentId, seniorId },
+      // Phase 16 (A11): grantee identity comes back by id only — the
+      // DocumentAccess model has no user relation, and enumerating
+      // grantee emails/names through this read path is PII leakage.
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -364,13 +365,12 @@ export class DocumentService {
       throw new ForbiddenException('Only FAMILY_ADMIN or DOCTOR can revoke document access.');
     }
     const grant = await this.prisma.documentAccess.findFirst({
-      where: { id: grantId, documentId, seniorId, deletedAt: null },
+      where: { id: grantId, documentId, seniorId },
     });
     if (!grant) throw new NotFoundException('Access grant not found.');
-    await this.prisma.documentAccess.update({
-      where: { id: grantId },
-      data: { deletedAt: new Date() },
-    });
+    // DocumentAccess has no deletedAt column; revocation removes the
+    // grant row (the revoke event itself is preserved in the audit log).
+    await this.prisma.documentAccess.delete({ where: { id: grantId } });
     await this.prisma.auditLog.create({
       data: {
         actorUserId: userId,

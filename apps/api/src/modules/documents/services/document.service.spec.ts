@@ -32,14 +32,17 @@ describe('DocumentService security', () => {
       },
       documentAccess: {
         findFirst: async (opts: any) => {
-          if (opts.where.id === 'grant-a' && opts.where.documentId === 'doc-a' && opts.where.seniorId === 'senior-a' && opts.where.deletedAt === null) {
-            return { id: 'grant-a', documentId: 'doc-a', userId: 'user-c', seniorId: 'senior-a', deletedAt: null, grantedByUserId: 'user-a' };
+          // DocumentAccess has no deletedAt column (real Prisma schema);
+          // revocation deletes the row outright.
+          if (opts.where.id === 'grant-a' && opts.where.documentId === 'doc-a' && opts.where.seniorId === 'senior-a') {
+            return { id: 'grant-a', documentId: 'doc-a', userId: 'user-c', seniorId: 'senior-a', grantedByUserId: 'user-a' };
           }
           return null;
         },
         findMany: async () => [],
         create: async (opts: any) => ({ id: 'new-grant', ...opts.data }),
         update: async () => ({}),
+        delete: async (opts: any) => ({ id: opts.where.id }),
       },
       auditLog: {
         create: async () => ({ id: 'audit-1' }),

@@ -39,9 +39,9 @@ describe('API Client Security', () => {
     } as Response);
 
     await apiFetch('/test');
-    const fetchCall = (global.fetch as vi.Mock).mock.results[0]?.value as Promise<Response>;
+    const fetchCall = (global.fetch as ReturnType<typeof vi.fn>).mock.results[0]?.value as Promise<Response>;
     // We verify fetch was called with Authorization header by inspecting arguments
-    const lastCall = (global.fetch as vi.Mock).mock.calls.pop();
+    const lastCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.pop();
     const init = lastCall?.[1] as RequestInit | undefined;
     expect(init?.headers).toBeDefined();
     const headersObj = init?.headers as Record<string, string> | Headers;
@@ -58,7 +58,7 @@ describe('API Client Security', () => {
     } as Response);
 
     await apiFetch('/test');
-    const lastCall = (global.fetch as vi.Mock).mock.calls.pop();
+    const lastCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.pop();
     const init = lastCall?.[1] as RequestInit | undefined;
     const headersObj = init?.headers as Record<string, string> | Headers;
     const authHeader = headersObj instanceof Headers ? headersObj.get('Authorization') : (headersObj as Record<string, string>)['Authorization'];
@@ -114,7 +114,7 @@ describe('API Client Security', () => {
       expect.fail('Should have thrown');
     } catch (e: unknown) {
       expect(e).toBeInstanceOf(ApiError);
-      const err = e as ApiError;
+      const err = e as InstanceType<typeof ApiError>;
       expect(err.status).toBe(500);
       expect(err.message).toBe('Request failed (500)');
       expect(err.message).not.toContain('database');

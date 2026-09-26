@@ -1,31 +1,33 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 
+import { resolveJwtAccessSecret } from '../config/security-config';
 import { PrismaModule } from '../database/prisma.module';
 
+import { AuthorizationService } from './authorization.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 
 /**
  * Authentication and authorization module.
  *
- * Phase 3 focus:
- * - Registration, login, refresh, logout, me endpoints.
- * - Refresh-token rotation with reuse detection (family-based).
- * - RBAC with @Roles() decorator and RolesGuard.
- * - Authentication audit events via AuditLog (database-level,
- *   enforced by the application layer in Phase 4).
+ * Phase 16 focus:
+ * - Fail-fast JWT secret resolution (C2/A2) — no dev-secret fallback.
+ * - CSPRNG refresh tokens with O(1) jti lookup + real reuse revocation
+ *   (C1/A1, H3/A5, H4/A6).
+ * - JwtModule exported so feature controllers that attach JwtAuthGuard by
+ *   class reference can resolve their dependencies.
  */
 @Module({
   imports: [
     PrismaModule,
     JwtModule.register({
-      secret: process.env['JWT_ACCESS_SECRET'] ?? 'dev-secret-change-me',
+      secret: resolveJwtAccessSecret(),
       signOptions: { expiresIn: '15m' },
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService],
-  exports: [AuthService],
+  providers: [AuthService, AuthorizationService],
+  exports: [AuthService, AuthorizationService, JwtModule],
 })
 export class AuthModule {}

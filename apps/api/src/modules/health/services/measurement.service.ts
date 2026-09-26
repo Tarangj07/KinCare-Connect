@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { AuthorizationService } from '../../auth/authorization.service';
-import { PrismaService } from '../../database/prisma.service';
+import { AuthorizationService } from '../../../auth/authorization.service';
+import { PrismaService } from '../../../database/prisma.service';
 
 @Injectable()
 export class HealthMeasurementService {
@@ -13,9 +13,9 @@ export class HealthMeasurementService {
   async create(seniorId: string, userId: string, data: { measurementTypeKey: string; value: Record<string, unknown>; measuredAt: string; source?: string; note?: string }) {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
     const role = await this.authorizationService.getMemberRole(userId, seniorId);
-    // FAMILY_ADMIN, FAMILY_MEMBER, CAREGIVER, DOCTOR, OBSERVER all can record observations.
-    // No role restriction for observations unless observer is restricted.
-    const allowedRoles = ['FAMILY_ADMIN', 'FAMILY_MEMBER', 'CAREGIVER', 'DOCTOR', 'OBSERVER'];
+    // Phase 16 (H9/A9): OBSERVER is a read-only circle role. Observing
+    // PHI (GET routes) stays allowed; writing or removing PHI is not.
+    const allowedRoles = ['FAMILY_ADMIN', 'FAMILY_MEMBER', 'CAREGIVER', 'DOCTOR'];
     if (!allowedRoles.includes(role ?? '')) {
       throw new ForbiddenException('Insufficient privileges to record health measurements.');
     }
@@ -28,7 +28,7 @@ export class HealthMeasurementService {
       data: {
         seniorId,
         typeId: measurementType.id,
-        value: data.value,
+        value: data.value as object,
         measuredAt: new Date(data.measuredAt),
         source: (data.source as 'MANUAL' | 'DEVICE' | 'IMPORT' | 'SYSTEM') ?? 'MANUAL',
         recordedByUserId: userId,
@@ -81,6 +81,14 @@ export class HealthMeasurementService {
 
   async archive(seniorId: string, measurementId: string, userId: string) {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
+    // Phase 16 (H9/A9): OBSERVER (and any non-steward role) must not
+    // delete protected PHI. Only FAMILY_ADMIN and DOCTOR may archive
+    // measurements; recorders who entered a wrong value are corrected by
+    // a steward rather than deleting history themselves.
+    const role = await this.authorizationService.getMemberRole(userId, seniorId);
+    if (role !== 'FAMILY_ADMIN' && role !== 'DOCTOR') {
+      throw new ForbiddenException('Only FAMILY_ADMIN or DOCTOR can archive health measurements.');
+    }
     const measurement = await this.prisma.healthMeasurement.findFirst({ where: { id: measurementId, seniorId, deletedAt: null } });
     if (!measurement) throw new NotFoundException('Health measurement not found.');
     const updated = await this.prisma.healthMeasurement.update({

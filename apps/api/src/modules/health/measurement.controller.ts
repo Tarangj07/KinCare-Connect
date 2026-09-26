@@ -2,19 +2,19 @@ import {
   Body, Controller, Delete, ForbiddenException, Get, NotFoundException,
   Param, Patch, Post, Req, UseGuards,
 } from '@nestjs/common';
-import { Request } from 'express';
+import type { Request } from 'express';
 
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { AuthorizationService } from '../../auth/authorization.service';
 import { CreateHealthMeasurementDto } from './dto/measurement.dto';
-import { MeasurementService } from './services/measurement.service';
+import { HealthMeasurementService } from './services/measurement.service';
 
 @Controller('seniors/:seniorId/measurements')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class HealthMeasurementController {
   constructor(
-    private readonly measurementService: MeasurementService,
+    private readonly measurementService: HealthMeasurementService,
     private readonly authorizationService: AuthorizationService,
   ) {}
 

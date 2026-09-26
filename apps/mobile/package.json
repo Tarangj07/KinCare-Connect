@@ -13,7 +13,7 @@
     "build": "echo \"(mobile uses expo prebuild + EAS in later phases; phase 1 is a typecheck-only build)\" && tsc --noEmit",
     "lint": "eslint \"src/**/*.{ts,tsx}\" --max-warnings 0",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"(mobile vitest pipeline lands in Phase 14 alongside the Expo test runner)\" && exit 0",
+    "test": "vitest run",
     "clean": "rm -rf node_modules .expo .turbo dist coverage *.tsbuildinfo"
   },
   "dependencies": {

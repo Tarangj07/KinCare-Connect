@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { AuthorizationService } from '../../auth/authorization.service';
-import { PrismaService } from '../../database/prisma.service';
+import { AuthorizationService } from '../../../auth/authorization.service';
+import { PrismaService } from '../../../database/prisma.service';
 
 @Injectable()
 export class CareTaskService {
@@ -13,7 +13,7 @@ export class CareTaskService {
   async create(seniorId: string, userId: string, data: { title: string; description?: string; priority?: string; dueAt?: string; recurrenceFrequency?: string; recurrenceRule?: string; recurrenceEndsAt?: string }) {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
     const role = await this.authorizationService.getMemberRole(userId, seniorId);
-    if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER' && role !== 'CARETAKER' && role !== 'DOCTOR') {
+    if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER' && role !== 'CAREGIVER' && role !== 'DOCTOR') {
       throw new ForbiddenException('Only FAMILY_ADMIN can create care tasks.');
     }
     const dueAtValue = data.dueAt ? new Date(data.dueAt) : null;
@@ -71,7 +71,7 @@ export class CareTaskService {
   async update(seniorId: string, taskId: string, userId: string, data: { title?: string; description?: string; priority?: string; status?: string; dueAt?: string; completedAt?: string; recurrenceFrequency?: string; recurrenceRule?: string; recurrenceEndsAt?: string }) {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
     const role = await this.authorizationService.getMemberRole(userId, seniorId);
-    if (role !== 'FAMILY_ADMIN' && role !== 'CARETAKER') {
+    if (role !== 'FAMILY_ADMIN' && role !== 'CAREGIVER') {
       throw new ForbiddenException('Only FAMILY_ADMIN or assigned CAREGIVER can modify tasks.');
     }
     const updateData: Record<string, unknown> = {};
@@ -105,7 +105,7 @@ export class CareTaskService {
   async cancel(seniorId: string, taskId: string, userId: string) {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
     const role = await this.authorizationService.getMemberRole(userId, seniorId);
-    if (role !== 'FAMILY_ADMIN' && role !== 'CARETAKER') {
+    if (role !== 'FAMILY_ADMIN' && role !== 'CAREGIVER') {
       throw new ForbiddenException('Only FAMILY_ADMIN or assigned CAREGIVER can cancel tasks.');
     }
     const task = await this.prisma.careTask.update({
@@ -129,7 +129,7 @@ export class CareTaskService {
   async complete(seniorId: string, taskId: string, userId: string) {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
     const role = await this.authorizationService.getMemberRole(userId, seniorId);
-    if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER' && role !== 'CARETAKER') {
+    if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER' && role !== 'CAREGIVER') {
       throw new ForbiddenException('Only FAMILY_ADMIN, FAMILY_MEMBER, or assigned CAREGIVER can complete tasks.');
     }
     const task = await this.prisma.careTask.update({

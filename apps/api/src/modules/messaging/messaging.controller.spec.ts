@@ -1,21 +1,38 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { AppModule } from '../../app.module';
+import { JwtService } from '@nestjs/jwt';
 
-describe('Messaging endpoints — authorization and security (Phase 11)', () => {
+import { AppModule } from '../../app.module';
+import { resolveJwtAccessSecret } from '../../config/security-config';
+
+const DB_URL = process.env['DATABASE_URL'];
+const describeDb = DB_URL ? describe : describe.skip;
+
+describeDb('Messaging endpoints — authorization and security (Phase 11)', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
+    app.setGlobalPrefix('api/v1');
+    app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }));
     await app.init();
   });
 
   afterEach(async () => {
     await app.close();
   });
+
+  // Phase 16: DTO-validation tests must clear the (now correctly strict)
+  // JWT guard, so they use a genuinely signed access token.
+  function signedToken(): string {
+    return new JwtService({}).sign(
+      { sub: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', email: 'dto@example.com', role: 'USER' },
+      { secret: resolveJwtAccessSecret() },
+    );
+  }
 
   // 1. Authenticated user required
   it('requires authentication for message endpoints', async () => {
@@ -184,9 +201,12 @@ describe('Messaging endpoints — authorization and security (Phase 11)', () => 
 
   // Additional: malformed targetUserId rejected (Finding 4)
   it('rejects malformed targetUserId', async () => {
+    // Valid UUID route params so the request reaches authorization (the
+    // user is not a participant of this conversation) instead of a DB cast
+    // error from a non-UUID path parameter.
     const res = await request(app.getHttpServer())
-      .post('/api/v1/seniors/test-senior/conversations/test-conv/participants')
-      .set('Authorization', 'Bearer test-token')
+      .post('/api/v1/seniors/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/conversations/b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/participants')
+      .set('Authorization', `Bearer ${signedToken()}`)
       .send({ targetUserId: 'not-a-uuid' });
     expect([400, 403, 422]).toContain(res.status);
   });
@@ -216,7 +236,7 @@ describe('Messaging endpoints — authorization and security (Phase 11)', () => 
   it('requires valid UUID format for replyToId', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/v1/seniors/test-senior/conversations/test-conv/messages')
-      .set('Authorization', 'Bearer test-token')
+      .set('Authorization', `Bearer ${signedToken()}`)
       .send({ body: 'hello', replyToId: 'invalid-id' });
     expect([400, 403, 422]).toContain(res.status);
   });

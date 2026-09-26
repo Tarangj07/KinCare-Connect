@@ -1,14 +1,19 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import request from 'supertest';
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { AppModule } from '../app.module';
+import { AppModule } from '../../app.module';
 
-describe('Document endpoints', () => {
+const DB_URL = process.env['DATABASE_URL'];
+const describeDb = DB_URL ? describe : describe.skip;
+
+describeDb('Document endpoints', () => {
   let app: INestApplication;
   beforeEach(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
+    app.setGlobalPrefix('api/v1');
+    app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }));
     await app.init();
   });
   afterEach(async () => { await app.close(); });

@@ -2,9 +2,27 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CircleRole } from '@prisma/client';
 
+/**
+ * Care-circle authorization.
+ *
+ * Phase 16 (H10/A3): membership `endsAt` is enforced. A relationship that
+ * has ended (endsAt in the past) no longer grants access even while the
+ * row still carries status = ACTIVE — ending a caregiver engagement does
+ * not require a second status write to be safe.
+ */
 @Injectable()
 export class AuthorizationService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private membershipWhere(userId: string, circleIds: string[]) {
+    return {
+      circleId: { in: circleIds },
+      userId,
+      status: 'ACTIVE' as const,
+      deletedAt: null,
+      OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }],
+    };
+  }
 
   async canAccessSenior(userId: string, seniorId: string): Promise<boolean> {
     const seniorProfile = await this.prisma.seniorProfile.findUnique({
@@ -20,12 +38,7 @@ export class AuthorizationService {
 
     const circleIds = circles.map((c) => c.id);
     const membership = await this.prisma.careCircleMember.findFirst({
-      where: {
-        circleId: { in: circleIds },
-        userId,
-        status: 'ACTIVE',
-        deletedAt: null,
-      },
+      where: this.membershipWhere(userId, circleIds),
       select: { role: true },
     });
     return membership !== null;
@@ -42,12 +55,7 @@ export class AuthorizationService {
       select: { id: true },
     });
     const membership = await this.prisma.careCircleMember.findFirst({
-      where: {
-        circleId: { in: circles.map((c) => c.id) },
-        userId,
-        status: 'ACTIVE',
-        deletedAt: null,
-      },
+      where: this.membershipWhere(userId, circles.map((c) => c.id)),
       select: { role: true },
     });
     return (membership?.role as CircleRole | null) ?? null;

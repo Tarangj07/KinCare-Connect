@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
-import { AuthorizationService } from '../../auth/authorization.service';
+import { PrismaService } from '../../../database/prisma.service';
+import { AuthorizationService } from '../../../auth/authorization.service';
 import { NotificationService } from '../../notifications/services/notification.service';
 import type { EmergencyAlertStatus, EmergencyAlertSeverity, EmergencyAlertType } from '@prisma/client';
 
@@ -70,12 +70,14 @@ export class EmergencyService {
       return alert;
     });
 
-    // Derive recipients from active CareCircle members for this senior.
+    // Derive recipients from active, unexpired CareCircle members for
+    // this senior (Phase 16 — H10/A3: ended relationships are excluded).
     const members = await this.prisma.careCircleMember.findMany({
       where: {
         circle: { seniorId, deletedAt: null, isActive: true },
         status: 'ACTIVE',
         deletedAt: null,
+        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }],
       },
       select: { userId: true },
     });

@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { AuthorizationService } from '../../auth/authorization.service';
-import { PrismaService } from '../../database/prisma.service';
+import { AuthorizationService } from '../../../auth/authorization.service';
+import { PrismaService } from '../../../database/prisma.service';
 
 @Injectable()
 export class DoseRecordingService {
@@ -16,9 +16,8 @@ export class DoseRecordingService {
     if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER' && role !== 'CAREGIVER') {
       throw new ForbiddenException('Only authorized family members or caregivers can record doses.');
     }
-    const dose = await this.prisma.medicationDose.findUnique({ where: { id: doseId, deletedAt: null } });
+    const dose = await this.prisma.medicationDose.findFirst({ where: { id: doseId, seniorId } });
     if (!dose) throw new NotFoundException('Dose not found.');
-    if (dose.seniorId !== seniorId) throw new ForbiddenException('Dose does not belong to senior.');
     const updated = await this.prisma.medicationDose.update({
       where: { id: doseId },
       data: { status: 'TAKEN', recordedAt: new Date(), recordedByUserId: userId, note: null },
@@ -35,7 +34,7 @@ export class DoseRecordingService {
     if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER' && role !== 'CAREGIVER') {
       throw new ForbiddenException('Only authorized family members or caregivers can skip doses.');
     }
-    const dose = await this.prisma.medicationDose.findUnique({ where: { id: doseId, deletedAt: null } });
+    const dose = await this.prisma.medicationDose.findFirst({ where: { id: doseId, seniorId } });
     if (!dose) throw new NotFoundException('Dose not found.');
     const updated = await this.prisma.medicationDose.update({
       where: { id: doseId },
@@ -53,7 +52,7 @@ export class DoseRecordingService {
     if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER' && role !== 'CAREGIVER') {
       throw new ForbiddenException('Only authorized family members or caregivers can snooze doses.');
     }
-    const dose = await this.prisma.medicationDose.findUnique({ where: { id: doseId, deletedAt: null } });
+    const dose = await this.prisma.medicationDose.findFirst({ where: { id: doseId, seniorId } });
     if (!dose) throw new NotFoundException('Dose not found.');
     const updated = await this.prisma.medicationDose.update({
       where: { id: doseId },

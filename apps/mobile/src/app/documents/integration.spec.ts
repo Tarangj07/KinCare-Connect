@@ -27,7 +27,7 @@ describe('Document Integration', () => {
 
     const result = await api.get('/api/v1/seniors/s1/documents');
     expect(Array.isArray(result)).toBe(true);
-    expect((global.fetch as vi.Mock).mock.calls[0][0]).toContain('documents');
+    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('documents');
   });
 
   it('download calls expected backend endpoint', async () => {
@@ -39,7 +39,7 @@ describe('Document Integration', () => {
     } as Response);
 
     await api.get('/api/v1/seniors/s1/documents/d1/download');
-    expect((global.fetch as vi.Mock).mock.calls[0][0]).toContain('download');
+    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('download');
   });
 
   it('unauthorized document response produces safe user-facing error', async () => {
