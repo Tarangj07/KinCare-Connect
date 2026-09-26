@@ -1,7 +1,6 @@
 # Elderly Care Coordination Platform
 
-A secure, family-and-caregiver coordination platform for elderly
-relatives. See `PROJECT_PLAN.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`,
+KinCare Connect is a full-stack elderly-care coordination platform that allows families and caregivers to coordinate medications, appointments, care tasks, health measurements, documents, communication, notifications, and emergency events through a shared backend with senior-centric access control. See `PROJECT_PLAN.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`,
 and `SECURITY.md` for the design.
 
 > **Status:** Phase 1 — monorepo foundation complete. Three apps
