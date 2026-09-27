@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateMessageDto {
   @IsString()
@@ -7,6 +7,7 @@ export class CreateMessageDto {
   body!: string;
 
   @IsString()
+  @IsOptional()
   @IsUUID(4)
   replyToId?: string;
 }

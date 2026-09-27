@@ -20,11 +20,12 @@
     "prisma:migrate:reset": "prisma migrate reset",
     "prisma:seed": "prisma db seed",
     "lint": "eslint \"{src,test}/**/*.ts\" --max-warnings 0",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.seed.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:cov": "vitest run --coverage",
-    "test:e2e": "vitest run --config vitest.config.e2e.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.seed.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run --config vitest.config.unit.ts",
+    "test:watch": "vitest --config vitest.config.unit.ts",
+    "test:integration": "vitest run --config vitest.config.e2e.ts",
+    "test:all": "vitest run",
+    "test:cov": "vitest run --config vitest.config.unit.ts --coverage",
     "clean": "rm -rf node_modules dist .turbo *.tsbuildinfo coverage"
   },
   "prisma": {

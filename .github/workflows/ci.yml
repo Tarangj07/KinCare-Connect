@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API — typecheck, tests (unit + PostgreSQL integration), build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ecc
+          POSTGRES_PASSWORD: ecc-ci-secret
+          POSTGRES_DB: ecc_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ecc -d ecc_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ecc:ecc-ci-secret@localhost:5432/ecc_ci
+      # 32+ char CI-only secret (fail-fast validation requires it;
+      # NODE_ENV=test also allows ephemeral fallback, but being explicit
+      # keeps cookie/secure semantics predictable).
+      JWT_ACCESS_SECRET: ci-only-secret-value-min-32-chars-0000000000
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @ecc/api exec prisma generate
+
+      - name: Validate Prisma schema
+        run: pnpm --filter @ecc/api exec prisma validate
+
+      - name: Apply migrations to fresh CI database
+        run: pnpm --filter @ecc/api exec prisma migrate deploy
+
+      - name: API typecheck
+        run: pnpm --filter @ecc/api typecheck
+
+      - name: API build
+        run: pnpm --filter @ecc/api build
+
+      - name: API unit tests
+        run: pnpm --filter @ecc/api test
+
+      - name: API integration tests (real PostgreSQL)
+        run: pnpm --filter @ecc/api test:integration
+
+      - name: API lint (advisory — 55 pre-existing errors carried from the
+          Phase 16 checkpoint; see docs/PHASE_17_TESTING_CI_RELIABILITY.md)
+        continue-on-error: true
+        run: pnpm --filter @ecc/api lint
+
+  mobile:
+    name: Mobile — typecheck and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Mobile typecheck
+        run: pnpm --filter @ecc/mobile typecheck
+      - name: Mobile tests
+        run: pnpm --filter @ecc/mobile test
+      - name: Mobile lint (advisory — pre-existing warnings block
+          --max-warnings 0 at the checkpoint)
+        continue-on-error: true
+        run: pnpm --filter @ecc/mobile lint
+
+  web:
+    name: Web — typecheck, lint, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Web typecheck
+        run: pnpm --filter @ecc/web typecheck
+      - name: Web lint
+        run: pnpm --filter @ecc/web lint
+      - name: Web tests
+        run: pnpm --filter @ecc/web test
+      - name: Web build
+        run: pnpm --filter @ecc/web build

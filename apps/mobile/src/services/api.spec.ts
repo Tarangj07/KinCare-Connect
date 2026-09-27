@@ -22,8 +22,10 @@ describe('API Client Security', () => {
   });
 
   it('access token is retrieved from SecureStore/session layer', async () => {
-    const { getAccessToken } = await import('./session');
-    await getAccessToken(); // verifies it reads from mocked store without error
+    const { getAccessToken, storeAccessToken } = await import('./session');
+    expect(await getAccessToken()).toBeNull();
+    await storeAccessToken('stored-token');
+    expect(await getAccessToken()).toBe('stored-token');
   });
 
   it('authenticated requests receive the Authorization header', async () => {

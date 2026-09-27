@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsUUID, Matches, IsIn, IsInt, Min, Max } from 'class-validator';
+import { IsObject, IsString, IsNotEmpty, IsOptional, IsUUID, Matches, IsIn, IsInt, Min, Max } from 'class-validator';
 
 /**
  * Create a health measurement for a senior.
@@ -14,6 +14,9 @@ export class CreateHealthMeasurementDto {
 
   /// Structured value as JSON. For scalar: { "kind":"scalar","value":72,"unit":"bpm" }
   /// For compound (e.g. BP): { "kind":"compound","components":{"systolic":120,"diastolic":80,"unit":"mmHg"} }
+  /// Phase 17: required a validator — with no decorator it was stripped by
+  /// the strict whitelist and every measurement POST failed with 400.
+  @IsObject({ message: 'value must be a JSON object.' })
   value!: Record<string, unknown>;
 
   @Matches(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/, { message: 'measuredAt must be ISO 8601 with timezone.' })

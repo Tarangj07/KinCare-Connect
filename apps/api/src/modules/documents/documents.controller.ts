@@ -33,7 +33,11 @@ export class DocumentController {
   }
 
   @Post()
-  @Roles('FAMILY_ADMIN', 'FAMILY_MEMBER', 'CAREGIVER', 'DOCTOR')
+  // Phase 17: RolesGuard matches the JWT's GLOBAL role (USER/SUPER_ADMIN);
+  // circle roles are enforced in DocumentService. The previous
+  // @Roles('FAMILY_ADMIN', …) decorators could never match (JWT role is
+  // 'USER'), 403-blocking every upload/grant/archive for all users.
+  @Roles('USER', 'SUPER_ADMIN')
   async upload(
     @Param('seniorId') seniorId: string,
     @Body() dto: UploadDocumentDto,
@@ -85,7 +89,7 @@ export class DocumentController {
   }
 
   @Post(':documentId/access')
-  @Roles('FAMILY_ADMIN', 'DOCTOR')
+  @Roles('USER', 'SUPER_ADMIN')
   async grantAccess(
     @Param('seniorId') seniorId: string,
     @Param('documentId') documentId: string,
@@ -109,7 +113,7 @@ export class DocumentController {
   }
 
   @Delete(':documentId/access/:grantId')
-  @Roles('FAMILY_ADMIN', 'DOCTOR')
+  @Roles('USER', 'SUPER_ADMIN')
   async revokeAccess(
     @Param('seniorId') seniorId: string,
     @Param('documentId') documentId: string,
@@ -122,7 +126,7 @@ export class DocumentController {
   }
 
   @Patch(':documentId/archive')
-  @Roles('FAMILY_ADMIN', 'DOCTOR')
+  @Roles('USER', 'SUPER_ADMIN')
   async archive(
     @Param('seniorId') seniorId: string,
     @Param('documentId') documentId: string,

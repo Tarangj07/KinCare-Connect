@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FeedService } from '../modules/feed/services/feed.service';
 import { HealthMeasurementService } from '../modules/health/services/measurement.service';
 
+import type { PrismaService } from '../database/prisma.service';
 import { AuthorizationService } from './authorization.service';
 
 const DB_URL = process.env['DATABASE_URL'];
@@ -31,7 +32,7 @@ describeDb('care-circle authorization + feed + health PHI (real database)', () =
   beforeAll(async () => {
     prisma = new PrismaClient({ datasourceUrl: DB_URL });
     await prisma.$connect();
-    authz = new AuthorizationService(prisma);
+    authz = new AuthorizationService(prisma as unknown as PrismaService);
 
     const stamp = Date.now();
     const mkUser = (tag: string) =>
@@ -106,7 +107,7 @@ describeDb('care-circle authorization + feed + health PHI (real database)', () =
   });
 
   describe('H6/A4 — PRIVATE feed visibility', () => {
-    const feed = () => new FeedService(prisma, authz);
+    const feed = () => new FeedService(prisma as unknown as PrismaService, authz);
     let privateId: string;
     let circleId: string;
 
@@ -152,7 +153,7 @@ describeDb('care-circle authorization + feed + health PHI (real database)', () =
   });
 
   describe('H9/A9 — OBSERVER must not write or delete PHI', () => {
-    const health = () => new HealthMeasurementService(prisma, authz);
+    const health = () => new HealthMeasurementService(prisma as unknown as PrismaService, authz);
 
     it('OBSERVER cannot record a measurement', async () => {
       await expect(

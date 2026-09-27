@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { hashToken } from '../config/security-config';
 
+import type { PrismaService } from '../database/prisma.service';
 import { AuthService } from './auth.service';
 
 const DB_URL = process.env['DATABASE_URL'];
@@ -63,7 +64,7 @@ describeDb('AuthService (real database)', () => {
 
   beforeEach(async () => {
     jwt = new JwtService({ secret: TEST_SECRET, signOptions: { expiresIn: '15m' } });
-    service = new AuthService(prisma, jwt);
+    service = new AuthService(prisma as unknown as PrismaService, jwt);
     createdUserIds = [];
   });
 

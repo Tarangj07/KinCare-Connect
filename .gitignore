@@ -68,3 +68,6 @@ playwright-report/
 *.p12
 *.pfx
 secrets/
+
+# Local document storage (dev fallback; tests use a temp dir)
+apps/api/uploads/

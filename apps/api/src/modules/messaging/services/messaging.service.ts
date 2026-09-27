@@ -14,7 +14,7 @@ export class MessagingService {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
     const conversation = await this.prisma.conversation.findFirst({
       where: { id: conversationId, seniorId, deletedAt: null },
-      include: { participants: { where: { userId, leftAt: null, createdAt: { gt: '1970-01-01' } } } },
+      include: { participants: { where: { userId, leftAt: null } } },
     });
     if (!conversation) {
       throw new ForbiddenException('Access denied: conversation not accessible for this senior or user is not a participant.');

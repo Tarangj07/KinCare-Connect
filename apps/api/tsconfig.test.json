@@ -1,0 +1,13 @@
+{
+  "extends": "@ecc/config/tsconfig.node.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "useDefineForClassFields": false,
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["src/**/*.spec.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

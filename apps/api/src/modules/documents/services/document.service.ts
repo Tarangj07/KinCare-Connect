@@ -178,15 +178,18 @@ export class DocumentService {
         resourceType: 'health_document',
         resourceId: document.id,
         seniorId,
-        metadata: { title: data.title, category: data.category || null, contentType: data.contentType, sizeBytes: fileBuffer.length, storageKey: safeKey },
+        metadata: { title: data.title, category: data.category || null, contentType: data.contentType, sizeBytes: fileBuffer.length },
       },
     });
-    return document;
+    // Phase 17 (A15): `sizeBytes` is a Prisma BigInt — return it as a JSON
+    // number (same as downloadDocument) so responses serialize. The audit
+    // entry above no longer duplicates the internal storageKey either.
+    return { ...document, sizeBytes: Number(document.sizeBytes) };
   }
 
   async listDocuments(seniorId: string, userId: string) {
     await this.authorizationService.assertCanAccessSenior(userId, seniorId);
-    return this.prisma.healthDocument.findMany({
+    const docs = await this.prisma.healthDocument.findMany({
       where: { seniorId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
       select: {
@@ -201,6 +204,8 @@ export class DocumentService {
         uploadedBy: { select: { id: true, fullName: true } },
       },
     });
+    // Phase 17 (A15): BigInt columns are not JSON-serializable.
+    return docs.map((d) => ({ ...d, sizeBytes: Number(d.sizeBytes) }));
   }
 
   async getDocument(seniorId: string, documentId: string, userId: string) {
@@ -213,7 +218,11 @@ export class DocumentService {
       include: { uploadedBy: { select: { id: true, fullName: true } } },
     });
     if (!doc) throw new NotFoundException('Document not found.');
-    return doc;
+    // Phase 17 (A15): BigInt is not JSON-serializable; strip internal
+    // storage identifiers from the response.
+    const { storageKey, contentHash, ...publicDoc } = doc;
+    void storageKey; void contentHash;
+    return { ...publicDoc, sizeBytes: Number(doc.sizeBytes) };
   }
 
   async downloadDocument(seniorId: string, documentId: string, userId: string) {

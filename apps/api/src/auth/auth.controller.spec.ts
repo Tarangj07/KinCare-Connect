@@ -46,7 +46,7 @@ describeDb('Auth endpoints (integration)', () => {
     expect(res.body.access.length).toBeGreaterThan(20);
     expect(res.body.user).toMatchObject({ email });
 
-    const setCookie: string[] = res.headers['set-cookie'] ?? [];
+    const setCookie = (res.headers['set-cookie'] ?? []) as unknown as string[];
     const refreshCookie = setCookie.find((c) => c.startsWith('refresh='));
     expect(refreshCookie).toBeDefined();
     expect(refreshCookie).toMatch(/HttpOnly/i);
