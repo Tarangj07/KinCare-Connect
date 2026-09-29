@@ -1,9 +1,12 @@
 # Elderly Care Coordination Platform (ECC)
 
-A multi-tenant coordination platform for elderly care: families, professional
-caregivers and the seniors they support use it to share health measurements,
-documents, schedules, care tasks, medication history, messaging and emergency
-alerts.
+KinCare Connect is a full-stack, multi-tenant elderly-care coordination
+platform that lets families and professional caregivers coordinate medications,
+appointments, care tasks, health measurements, documents, messaging,
+notifications and emergency events through a shared backend with
+senior-centric access control. Families, caregivers and the seniors they
+support use it to share health measurements, documents, schedules, care
+tasks, medication history, messaging and emergency alerts.
 
 Design documents: `ARCHITECTURE.md`, `THREAT_MODEL.md`, `SECURITY.md`,
 `COMPLIANCE.md`. The active plan and its current milestone are in
