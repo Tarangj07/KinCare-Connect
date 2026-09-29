@@ -368,6 +368,20 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter @ecc/api exec prisma generate
 
+      # The API build must precede the migration gate. `verify-db-migrations.sh`
+      # ends by booting `node dist/main.js` and authenticating against it, so it
+      # requires a built artifact to exist. On a clean CI checkout `dist/` is
+      # absent, and running the gate before the build failed with
+      # `Cannot find module .../apps/api/dist/main.js` (first real run,
+      # 36557892479). This was invisible locally because the gate always ran
+      # after some earlier build in the same working tree.
+      #
+      # Ordering is the whole fix; the gate is unchanged and still enforces
+      # every check. `dist/` is intentionally not committed (.gitignore), so
+      # the build cannot be skipped rather than reordered.
+      - name: API build (for the migration and artifact checks)
+        run: pnpm --filter @ecc/api build
+
       # W9. This script creates and destroys its OWN throwaway PostgreSQL
       # container, so it cannot touch this job's service database or a
       # developer's. It covers: schema validation, `migrate status` on an
@@ -377,9 +391,6 @@ jobs:
       # authenticating against the freshly migrated schema.
       - name: Database — migration safety on throwaway databases (Phase 23 W9)
         run: bash scripts/verify-db-migrations.sh
-
-      - name: API build (for the artifact checks)
-        run: pnpm --filter @ecc/api build
 
       # W10. Proves the artifact contains what the source claims: a clean,
       # warm and stale-tsbuildinfo build each emit the entry point; dist is
