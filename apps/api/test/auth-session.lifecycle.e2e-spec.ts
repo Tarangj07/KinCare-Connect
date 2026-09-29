@@ -180,6 +180,43 @@ describeDb('Auth session lifecycle (real database, HTTP)', () => {
     expect(res.status).toBe(401);
   });
 
+  // ---------------------------------------------------------------------------
+  // Phase 24 (D-1). A deactivated or soft-deleted account keeps access for the
+  // remaining life of its access token — the guard consults the signature and
+  // nothing else, and closing that would mean a per-request database lookup
+  // (an architecture change, not a fix). The window is accepted for this
+  // threat model, so what is pinned here is the WINDOW ITSELF: the lifetime of
+  // the token that stays usable. Without this assertion the accepted residual
+  // risk is "≤ 15 minutes", and raising `expiresIn` to an hour or a day would
+  // silently widen it with every test still green.
+  // ---------------------------------------------------------------------------
+  it('the access token issued at login is bounded, so the D-1 window cannot widen silently', async () => {
+    const { access } = await registerAndLogin();
+    const parts = access.split('.');
+    expect(parts).toHaveLength(3);
+    const claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf8')) as {
+      sub: string;
+      iat: number;
+      exp: number;
+    };
+
+    expect(claims.sub, 'the access token has no subject').toBeTruthy();
+    expect(claims.iat, 'the access token has no issued-at claim; a maxAge bound cannot be evaluated').toBeTypeOf('number');
+    expect(claims.exp, 'the access token has no expiry').toBeTypeOf('number');
+    // A literal, not ACCESS_TOKEN_TTL_SECONDS. Comparing the issued lifetime
+    // against the constant the application uses would hold for any value of
+    // that constant, and this test exists precisely to catch the constant
+    // being changed. 15 minutes is the number quoted as the accepted residual
+    // risk of D-1, so changing it is a decision about that risk.
+    expect(
+      claims.exp! - claims.iat!,
+      `the access token lives for ${claims.exp! - claims.iat!}s. The accepted D-1 residual risk is stated as at ` +
+        'most 15 minutes; a longer lifetime is a deliberate change to that documented risk, not a silent one.',
+    ).toBe(15 * 60);
+    expect(claims.exp! * 1000 - Date.now(), 'the access token is already expired or exp is in the distant future')
+      .toBeGreaterThan(15 * 60 * 500);
+  });
+
   it('failed logins lock the account at the threshold over HTTP', async () => {
     const email = `p17lock-${Date.now()}@example.com`;
     await request(app.getHttpServer())

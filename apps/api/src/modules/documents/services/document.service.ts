@@ -15,6 +15,34 @@ const ALLOWED_CONTENT_TYPES = [
 ];
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 
+/**
+ * Phase 18 (L-01): single source of truth for the public shape of a
+ * HealthDocument returned to a client.
+ *
+ * Two things are enforced here for every JSON response path:
+ *  - `sizeBytes` is a Prisma `BigInt` and is converted to a JSON number
+ *    (Phase 17 / audit A15 — a BigInt throws on JSON serialization).
+ *  - `storageKey` (the internal storage path) and `contentHash` (an
+ *    integrity hash of the stored bytes) are STRIPPED. They are storage
+ *    implementation details with no client-side use; the service layer
+ *    keeps using `storageKey` internally for download, so removing it
+ *    from responses does not affect any server-side behaviour.
+ *
+ * Before this helper the three response paths sanitized independently:
+ * `getDocument` stripped the fields, `listDocuments` avoided them via a
+ * Prisma `select`, and `createDocument` returned the raw row spread
+ * (`{ ...document }`) — which leaked `storageKey` and `contentHash` in
+ * the upload response.
+ */
+function toPublicDocument<
+  T extends { sizeBytes: bigint; storageKey?: string; contentHash?: string },
+>(doc: T): Omit<T, 'storageKey' | 'contentHash' | 'sizeBytes'> & { sizeBytes: number } {
+  const { storageKey, contentHash, sizeBytes, ...rest } = doc;
+  void storageKey;
+  void contentHash;
+  return { ...rest, sizeBytes: Number(sizeBytes) };
+}
+
 @Injectable()
 export class DocumentService {
   constructor(
@@ -181,10 +209,11 @@ export class DocumentService {
         metadata: { title: data.title, category: data.category || null, contentType: data.contentType, sizeBytes: fileBuffer.length },
       },
     });
-    // Phase 17 (A15): `sizeBytes` is a Prisma BigInt — return it as a JSON
-    // number (same as downloadDocument) so responses serialize. The audit
-    // entry above no longer duplicates the internal storageKey either.
-    return { ...document, sizeBytes: Number(document.sizeBytes) };
+    // Phase 18 (L-01): route every response through the shared serializer so
+    // the upload response can no longer leak the internal `storageKey` /
+    // `contentHash` the way `{ ...document }` did. `sizeBytes` is also a
+    // Prisma BigInt and must become a JSON number (Phase 17 / audit A15).
+    return toPublicDocument(document);
   }
 
   async listDocuments(seniorId: string, userId: string) {
@@ -204,8 +233,9 @@ export class DocumentService {
         uploadedBy: { select: { id: true, fullName: true } },
       },
     });
-    // Phase 17 (A15): BigInt columns are not JSON-serializable.
-    return docs.map((d) => ({ ...d, sizeBytes: Number(d.sizeBytes) }));
+    // Phase 18 (L-01): shared serializer — BigInt-safe and guaranteed free of
+    // internal storage identifiers.
+    return docs.map((d) => toPublicDocument(d));
   }
 
   async getDocument(seniorId: string, documentId: string, userId: string) {
@@ -218,11 +248,9 @@ export class DocumentService {
       include: { uploadedBy: { select: { id: true, fullName: true } } },
     });
     if (!doc) throw new NotFoundException('Document not found.');
-    // Phase 17 (A15): BigInt is not JSON-serializable; strip internal
-    // storage identifiers from the response.
-    const { storageKey, contentHash, ...publicDoc } = doc;
-    void storageKey; void contentHash;
-    return { ...publicDoc, sizeBytes: Number(doc.sizeBytes) };
+    // Phase 18 (L-01): shared serializer strips the internal `storageKey` and
+    // `contentHash` and converts the BigInt `sizeBytes` to a JSON number.
+    return toPublicDocument(doc);
   }
 
   async downloadDocument(seniorId: string, documentId: string, userId: string) {
@@ -355,9 +383,36 @@ export class DocumentService {
   }
 
   async listGrants(seniorId: string, documentId: string, userId: string) {
+    // Phase 18 (L-02): the grant list is access-control metadata (who may
+    // open this document, and until when), not document content.
+    //
+    // Phase 16 finding A11 identified this endpoint as requiring "only
+    // senior access (any role incl. OBSERVER)"; the Phase 16 remediation
+    // removed the grantee PII (emails/names) but left the authorization
+    // level untouched, so any active circle member — including OBSERVER,
+    // and including members with no grant on the document at all — could
+    // enumerate the access topology of documents they cannot open.
+    //
+    // The rule applied here is the one already used by the mutating grant
+    // operations (grantAccess / revokeGrant) and by archiveDocument, plus
+    // the uploader, who is already a privileged party for their own
+    // document in `verifyDocumentAccess`:
+    //     FAMILY_ADMIN | DOCTOR | uploader
+    // No new authorization model is introduced; this reuses the existing
+    // CareCircle ACL via getMemberRole. Enforced in the service layer, so
+    // it applies regardless of the route or any controller decorator.
     await this.verificationForSenior(seniorId, userId);
     const doc = await this.prisma.healthDocument.findFirst({ where: { id: documentId, seniorId, deletedAt: null } });
     if (!doc) throw new NotFoundException('Document not found.');
+
+    const isUploader = doc.uploadedByUserId === userId;
+    if (!isUploader) {
+      const role = await this.authorizationService.getMemberRole(userId, seniorId);
+      if (role !== 'FAMILY_ADMIN' && role !== 'DOCTOR') {
+        throw new ForbiddenException('Not permitted to view access grants for this document.');
+      }
+    }
+
     return this.prisma.documentAccess.findMany({
       where: { documentId, seniorId },
       // Phase 16 (A11): grantee identity comes back by id only — the

@@ -4,6 +4,12 @@ import { AuthorizationService } from '../../../auth/authorization.service';
 import { NotificationService } from '../../notifications/services/notification.service';
 import type { EmergencyAlertStatus, EmergencyAlertSeverity, EmergencyAlertType } from '@prisma/client';
 
+/**
+ * Phase 18 (L-04): Prisma error code raised when a conditional `update`
+ * matches no row — i.e. the state machine already moved on.
+ */
+const PRISMA_RECORD_NOT_FOUND = 'P2025';
+
 interface EmergencyTransactionClient {
   emergencyAlert: {
     update: (args: { where: any; data: any }) => Promise<any>;
@@ -12,6 +18,16 @@ interface EmergencyTransactionClient {
   auditLog: {
     create: (args: { data: any }) => Promise<any>;
   };
+}
+
+/** True for Prisma's "record to update not found" (P2025). */
+function isPrismaRecordNotFound(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: unknown }).code === PRISMA_RECORD_NOT_FOUND
+  );
 }
 
 @Injectable()
@@ -127,6 +143,59 @@ export class EmergencyService {
     return alert;
   }
 
+  /**
+   * Phase 18 (L-04) — turn a lost conditional-update race into an
+   * intentional, documented API response.
+   *
+   * Each transition performs a race-safe conditional update
+   * (`where: { id, seniorId, status: <expected> }`) inside a transaction
+   * that also writes the audit row. That is correct and is NOT changed here:
+   * the conditional `status` predicate guarantees exactly one writer can
+   * apply a transition, and because the audit insert is in the same
+   * transaction, a losing writer rolls back and produces no audit row.
+   *
+   * The defect was purely in error mapping. Prisma raises P2025 ("record to
+   * update not found") when the conditional update matches no row. P2025 is
+   * not an HttpException, so the global filter turned the losing request
+   * into a 500 INTERNAL_ERROR — a server fault for what is actually a
+   * legitimate, expected client-visible outcome (someone else already
+   * acknowledged/resolved/cancelled the alert).
+   *
+   * P2025 is translated into the same ForbiddenException the pre-check
+   * raises for an ordinary invalid transition, and the alert's real
+   * current status is re-read so the response distinguishes
+   * already-ACKNOWLEDGED / already-RESOLVED / already-CANCELLED. The state
+   * machine is not weakened and multiple acknowledgements remain impossible.
+   */
+  private async rethrowTransitionLoss(
+    seniorId: string,
+    alertId: string,
+    verb: 'acknowledge' | 'resolve' | 'cancel',
+    err: unknown,
+  ): Promise<never> {
+    // Only a lost conditional update is remapped; every other error
+    // (including a genuine database failure) keeps its original handling.
+    if (!isPrismaRecordNotFound(err)) throw err;
+
+    let currentStatus: string | null = null;
+    try {
+      const row = await this.prisma.emergencyAlert.findFirst({
+        where: { id: alertId, seniorId },
+        select: { status: true },
+      });
+      currentStatus = row?.status ?? null;
+    } catch {
+      // Status re-read is best effort; fall back to a generic message.
+      currentStatus = null;
+    }
+
+    throw new ForbiddenException(
+      currentStatus
+        ? `Invalid transition: cannot ${verb} from ${currentStatus}.`
+        : `Invalid transition: cannot ${verb} this alert.`,
+    );
+  }
+
   async acknowledgeAlert(seniorId: string, alertId: string, userId: string) {
     await this.assertCanAccessSenior(userId, seniorId);
     const alert = await this.prisma.emergencyAlert.findFirst({
@@ -162,7 +231,7 @@ export class EmergencyService {
         },
       });
       return updated;
-    });
+    }).catch((err: unknown) => this.rethrowTransitionLoss(seniorId, alertId, 'acknowledge', err));
 
     return updated;
   }
@@ -201,7 +270,7 @@ export class EmergencyService {
         },
       });
       return updated;
-    });
+    }).catch((err: unknown) => this.rethrowTransitionLoss(seniorId, alertId, 'resolve', err));
 
     return updated;
   }
@@ -240,7 +309,7 @@ export class EmergencyService {
         },
       });
       return updated;
-    });
+    }).catch((err: unknown) => this.rethrowTransitionLoss(seniorId, alertId, 'cancel', err));
 
     return updated;
   }

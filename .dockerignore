@@ -1,11 +1,49 @@
-node_modules
-.next
-.expo
-dist
-build
-coverage
-.turbo
+# Build context exclusions.
+#
+# Phase 20: the original patterns were root-anchored only. Docker matches
+# a pattern like `node_modules` against the context-root path alone, so
+# `apps/api/node_modules` and `apps/api/.env` were being SENT to the
+# builder and copied by `COPY apps/api ./apps/api`. Nested paths therefore
+# need `**/` prefixes. This mattered twice over: a symlinked host
+# node_modules tree cannot be used inside the image, and a real .env
+# (with a DATABASE_URL) must never enter an image build.
+
+# Dependencies and build output (always regenerated inside the image).
+**/node_modules
+**/.next
+**/.expo
+**/dist
+**/build
+**/coverage
+**/.turbo
+**/*.tsbuildinfo
+
+# VCS and tooling metadata.
 .git
-.env
-.env.local
-*.log
+.gitignore
+.github
+.vscode
+.idea
+
+# Secrets — never send real env files to the daemon. `.env.example`
+# templates contain no secrets and are kept out too, so nothing in the
+# image can accidentally be treated as configuration.
+**/.env
+**/.env.local
+**/.env.*.local
+**/.env.*
+**/.envrc
+
+# Local document storage (STORAGE_DIR) must be mounted, never baked in.
+# NOTE: only the `uploads` directories are local document storage.
+# `apps/api/src/storage/` is source code and must NOT be excluded.
+**/uploads
+
+# Logs and editor scratch files.
+**/*.log
+**/.DS_Store
+
+# Local databases / scratch data.
+*.sqlite
+*.sqlite3
+*.db

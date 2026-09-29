@@ -27,7 +27,7 @@
 * We are **not** claiming HIPAA, GDPR, or any other regulatory compliance
   in this repository. We implement technical controls that make compliance
   achievable; the legal/BAA/training side is the deploying organisation's
-  responsibility. See `COMPLIANCE.md` (Phase 1) for the full split.
+  responsibility. See `COMPLIANCE.md` (added in Phase 26) for the full split.
 
 ---
 
@@ -317,7 +317,7 @@ with the system via a caregiver or family member.
 
 ## 6. Compliance posture
 
-We will publish a `COMPLIANCE.md` in Phase 1 that documents:
+`COMPLIANCE.md` (added in Phase 26) documents:
 
 * Technical controls we implement (encryption in transit, hashing,
   access control, audit logging, session security).

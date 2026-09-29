@@ -2,8 +2,9 @@
 
 > Engineering security controls. Pair with `THREAT_MODEL.md` (which
 > lists threats, mitigations, and residual risk) and `COMPLIANCE.md`
-> (which we will add in Phase 1 to document the legal / organisational
-> controls that remain the deployer's responsibility).
+> (which documents the legal / organisational controls that remain the
+> deployer's responsibility, and — importantly — which regulatory
+> compliance claims this repository explicitly does not make).
 
 This file is split into two parts:
 

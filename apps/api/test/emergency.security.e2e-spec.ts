@@ -149,13 +149,19 @@ describeDb('Emergency alerts (real database, HTTP)', () => {
         .set('Authorization', auth(fx.membersA.admin)),
     ]);
     const winners = results.filter((r) => r.status === 201);
-    // Security property: the state machine never double-applies. The
-    // loser receives a rejection (403 invalid-transition) or — pre-existing
-    // reliability wart documented in Phase 17 notes — a 500 from Prisma's
-    // not-found on the conditional update; both are non-success.
+    // Phase 18 (L-04): the losing writer is no longer a 500. Prisma P2025
+    // from the lost conditional update is translated into the same
+    // ForbiddenException the ordinary invalid-transition path raises, so
+    // the race loser now gets an intentional 403 naming the real status.
     expect(winners.length).toBe(1);
     const losers = results.filter((r) => r.status !== 201);
-    expect(losers.every((r) => r.status >= 400)).toBe(true);
+    expect(losers.length).toBe(1);
+    for (const loser of losers) {
+      expect(loser.status).toBe(403);
+      expect(loser.body.error.message).toContain('Invalid transition');
+      // The message must name the state the alert actually reached.
+      expect(loser.body.error.message).toContain('ACKNOWLEDGED');
+    }
 
     const alert = await fx.prisma.emergencyAlert.findUnique({ where: { id } });
     expect(alert?.status).toBe('ACKNOWLEDGED');
@@ -170,6 +176,117 @@ describeDb('Emergency alerts (real database, HTTP)', () => {
       },
     });
     expect(ackAudits).toBe(1);
+  });
+
+  it('Phase 18 L-04: no 500 is produced by any racing transition (ack, resolve, cancel)', async () => {
+    // Sweeps the same defect across the other two conditional updates.
+    // The loser must always be a 403 with an "Invalid transition" message,
+    // never a 500 INTERNAL_ERROR.
+    const raceTargets = [
+      {
+        verb: 'acknowledge',
+        auditAction: 'emergency_alert.acknowledged',
+        create: () => createAlert('caregiver'),
+        path: (id: string) => `/api/v1/seniors/${fx.seniorA}/emergency-alerts/${id}/acknowledge`,
+        actorA: fx.membersA.doctor,
+        actorB: fx.membersA.admin,
+        expectedState: 'ACKNOWLEDGED',
+      },
+      {
+        verb: 'resolve',
+        auditAction: 'emergency_alert.resolved',
+        create: () => createAlert('caregiver'),
+        path: (id: string) => `/api/v1/seniors/${fx.seniorA}/emergency-alerts/${id}/resolve`,
+        actorA: fx.membersA.admin,
+        actorB: fx.membersA.doctor,
+        expectedState: 'RESOLVED',
+      },
+      {
+        verb: 'cancel',
+        auditAction: 'emergency_alert.cancelled',
+        create: () => createAlert('caregiver'),
+        path: (id: string) => `/api/v1/seniors/${fx.seniorA}/emergency-alerts/${id}/cancel`,
+        actorA: fx.membersA.caregiver,
+        actorB: fx.membersA.doctor,
+        expectedState: 'CANCELLED',
+      },
+    ];
+
+    for (const target of raceTargets) {
+      const created = await target.create();
+      expect(created.status).toBe(201);
+      const id = created.body.id as string;
+
+      const results = await Promise.all([
+        http().post(target.path(id)).set('Authorization', auth(target.actorA)),
+        http().post(target.path(id)).set('Authorization', auth(target.actorB)),
+      ]);
+
+      const winners = results.filter((r) => r.status === 201);
+      const losers = results.filter((r) => r.status !== 201);
+      expect(winners.length, `${target.verb}: exactly one winner`).toBe(1);
+      expect(losers.length, `${target.verb}: exactly one loser`).toBe(1);
+
+      for (const loser of losers) {
+        // The regression this replaces: `expect(loser.status).toBeGreaterThanOrEqual(400)`
+        // also accepted the 500 this fix removes.
+        expect(loser.status, `${target.verb}: loser must not be a server error`).toBe(403);
+        expect(loser.body.error.code).toBe('FORBIDDEN');
+        expect(loser.body.error.message).toContain('Invalid transition');
+        expect(loser.body.error.message).toContain(target.expectedState);
+      }
+
+      // Exactly one audit row for the winning transition.
+      const audits = await fx.prisma.auditLog.count({
+        where: {
+          resourceType: 'emergency_alert',
+          resourceId: id,
+          action: target.auditAction,
+        },
+      });
+      expect(audits, `${target.verb}: exactly one audit row`).toBe(1);
+
+      const row = await fx.prisma.emergencyAlert.findUnique({ where: { id } });
+      expect(row?.status).toBe(target.expectedState);
+    }
+  });
+
+  it('Phase 18 L-04: the four failure modes stay distinguishable', async () => {
+    // 1) success
+    const ok = await createAlert('caregiver');
+    const okId = ok.body.id as string;
+    const ack = await http()
+      .post(`/api/v1/seniors/${fx.seniorA}/emergency-alerts/${okId}/acknowledge`)
+      .set('Authorization', auth(fx.membersA.doctor));
+    expect(ack.status).toBe(201);
+    expect(ack.body.status).toBe('ACKNOWLEDGED');
+
+    // 2) already acknowledged → invalid transition naming the real state
+    const again = await http()
+      .post(`/api/v1/seniors/${fx.seniorA}/emergency-alerts/${okId}/acknowledge`)
+      .set('Authorization', auth(fx.membersA.admin));
+    expect(again.status).toBe(403);
+    expect(again.body.error.message).toContain('ACKNOWLEDGED');
+
+    // 3) unauthorized (OBSERVER may not acknowledge)
+    const obs = await createAlert('caregiver');
+    const obsAck = await http()
+      .post(`/api/v1/seniors/${fx.seniorA}/emergency-alerts/${obs.body.id}/acknowledge`)
+      .set('Authorization', auth(fx.membersA.observer));
+    expect(obsAck.status).toBe(403);
+    expect(obsAck.body.error.message).not.toContain('Invalid transition');
+
+    // 4) nonexistent / cross-senior resource
+    const notThere = await http()
+      .post(`/api/v1/seniors/${fx.seniorA}/emergency-alerts/00000000-0000-4000-8000-000000000999/acknowledge`)
+      .set('Authorization', auth(fx.membersA.doctor));
+    expect(notThere.status).toBe(403);
+    expect(notThere.body.error.message).not.toContain('Invalid transition');
+
+    const crossSenior = await http()
+      .post(`/api/v1/seniors/${fx.seniorB}/emergency-alerts/${okId}/acknowledge`)
+      .set('Authorization', auth(fx.membersB.admin));
+    expect(crossSenior.status).toBe(403);
   });
 
   it('role policy: FAMILY_MEMBER cannot resolve; CAREGIVER can cancel an ACTIVE alert', async () => {

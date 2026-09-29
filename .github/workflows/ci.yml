@@ -41,7 +41,19 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Phase 22 (P20-M-01 / P20-M-02). The repository pins
+          # pnpm@11.25.0 via `packageManager`, and pnpm 11.25.0 declares
+          # `"engines": { "node": ">=22.13" }`. Node 20 therefore cannot run
+          # the package manager this repository declares, and the mismatch
+          # was invisible because pnpm only warns about an unsatisfied
+          # `engines` field by default. Every job now uses Node 24, which is
+          # the same major the production images ship (node:24-alpine), so
+          # CI exercises the runtime that is actually deployed rather than a
+          # different one. Verified compatible: prisma/@prisma/client 5.22
+          # (>=16.13), next 14.2 (>=18.17), @nestjs/* 10.4 (unconstrained),
+          # argon2 0.45 (>=16.17), @swc/core 1.16 (>=10), vitest 2.1
+          # (^18 || >=20), expo 51 / react-native 0.74 (>=18).
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies (frozen lockfile)
@@ -62,6 +74,54 @@ jobs:
       - name: API build
         run: pnpm --filter @ecc/api build
 
+      - name: API build determinism (Phase 18 M-01 — clean, warm and stale
+          tsbuildinfo builds must each emit dist/main.js)
+        run: pnpm --filter @ecc/api build:verify
+
+      # --- Phase 23: compiled-artifact parity, authorization structure, and
+      # configuration contract. All three are fast (seconds), read only the
+      # freshly built dist, and would otherwise catch their defect hours later
+      # in the container job or not at all.
+      #
+      # W1 exists because Phase 22 shipped a production image in which
+      # register and login returned 400 for everyone, while every source-level
+      # suite was green: vitest/SWC and tsc emit DIFFERENT design:paramtypes
+      # for a DTO imported with `import type`. Only tsc output ships, so the
+      # gate reads the compiled artifact.
+      - name: Compiled artifact — Nest decorator-metadata parity (Phase 23 W1)
+        run: pnpm --filter @ecc/api verify:metadata
+
+      - name: Compiled artifact — every non-public route is guarded (Phase 23 W3)
+        run: pnpm --filter @ecc/api verify:routes
+
+      - name: Configuration contract — env, ports, versions, secrets (Phase 23 W5)
+        run: node scripts/verify-config-contract.mjs
+
+      - name: Supply chain — lockfile, native modules, engines (Phase 23 W6)
+        run: node scripts/verify-dependency-audit.mjs
+
+      # Advisory triage, not a raw count. `pnpm audit` reports 91 advisories;
+      # most are in build-time tools. This asserts that no critical/high
+      # advisory is reachable from a deployed code path, with the evidence
+      # recorded, so a genuinely reachable one fails the build instead of
+      # being lost in the noise.
+      - name: Supply chain — no reachable critical/high advisory (Phase 23 W6)
+        run: node scripts/triage-vulnerabilities.mjs
+
+      # Phase 25 (F-4/F-5). The triage script is only as good as the rules it
+      # applies, and two of those rules were not what they claimed: the
+      # `rewrites` check read the config file as TEXT and so missed the
+      # `rewrites()` function form Next.js actually uses, and the generic
+      # fallback filed any uncovered dev-only advisory as BUILD-TIME. These
+      # assert the detection is AST-based and that the classifier fails closed
+      # on an advisory nobody has read. Both run off fixtures or the real
+      # source, so neither needs the network.
+      - name: Supply chain — the triage classifier fails closed (Phase 25 F-5)
+        run: node scripts/verify-dependency-triage.mjs
+
+      - name: Web config — Next features are detected from the AST (Phase 25 F-4)
+        run: node scripts/verify-next-config-features.mjs
+
       - name: API unit tests
         run: pnpm --filter @ecc/api test
 
@@ -73,6 +133,159 @@ jobs:
         continue-on-error: true
         run: pnpm --filter @ecc/api lint
 
+      # --- Phase 19: deployment readiness (validation only) --------------
+      # These steps prove the production configuration contract and startup
+      # path work, using only the ephemeral CI database and throwaway values
+      # already present in this job. No cloud credentials, no production
+      # secrets, and no deployment of any kind.
+
+      - name: Deployment config — environment templates match code
+        run: pnpm --filter @ecc/api exec node ../../scripts/verify-env-contract.mjs
+
+      - name: Deployment config — production contract is enforced fail-closed
+        env:
+          STORAGE_DIR: ${{ runner.temp }}/ecc-ci-storage
+        run: |
+          cd apps/api
+          # A valid production configuration must pass.
+          NODE_ENV=production \
+          DATABASE_URL="postgresql://ecc:ecc-ci-secret@localhost:5432/ecc_ci" \
+          JWT_ACCESS_SECRET="ci-only-production-contract-value-32-chars-min" \
+          STORAGE_DIR="$STORAGE_DIR" \
+          node -e "require('./dist/config/runtime-config').assertRuntimeConfig(); console.log('valid production config accepted')"
+          # An invalid one must abort startup rather than half-configure.
+          #
+          # Phase 24: `STORAGE_DIR=` is load-bearing. The step-level `env:`
+          # sets STORAGE_DIR, so the second invocation INHERITED it, the API
+          # started, and this step failed with "API started in production
+          # without STORAGE_DIR (expected refusal)" — on the real runner, not
+          # hypothetically. It never demonstrated the property it asserts,
+          # because the only variable it was supposed to remove was the one
+          # variable still set. Proved locally both ways: with STORAGE_DIR
+          # inherited the process starts (exit 124 under `timeout`); with
+          # `STORAGE_DIR=` it exits 1 naming the missing variable.
+          if NODE_ENV=production \
+             DATABASE_URL="postgresql://ecc:ecc-ci-secret@localhost:5432/ecc_ci" \
+             JWT_ACCESS_SECRET="ci-only-production-contract-value-32-chars-min" \
+             STORAGE_DIR= \
+             node dist/main.js 2>/tmp/ecc-startup-err; then
+            echo "::error::API started in production without STORAGE_DIR (expected refusal)"
+            exit 1
+          fi
+          grep -q "STORAGE_DIR is required" /tmp/ecc-startup-err \
+            || { echo "::error::startup failure did not name the missing variable"; exit 1; }
+
+      - name: Deployment smoke — start API, probe health/readiness, stop cleanly
+        env:
+          STORAGE_DIR: ${{ runner.temp }}/ecc-ci-storage
+        run: |
+          cd apps/api
+          mkdir -p "$STORAGE_DIR" && chmod 700 "$STORAGE_DIR"
+          NODE_ENV=production \
+          DATABASE_URL="postgresql://ecc:ecc-ci-secret@localhost:5432/ecc_ci?connection_limit=2" \
+          JWT_ACCESS_SECRET="ci-only-production-contract-value-32-chars-min" \
+          STORAGE_DIR="$STORAGE_DIR" \
+          PORT=3123 node dist/main.js &
+          API_PID=$!
+          trap 'kill -TERM $API_PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3123/api/v1/health/ready >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          # Liveness must not depend on the database.
+          curl -fsS http://localhost:3123/api/v1/health | grep -q '"status":"ok"' \
+            || { echo "::error::liveness probe failed"; exit 1; }
+          # Readiness must succeed against the migrated CI database.
+          curl -fsS http://localhost:3123/api/v1/health/ready | grep -q '"status":"ok"' \
+            || { echo "::error::readiness probe failed"; exit 1; }
+          # Graceful shutdown must terminate the process on SIGTERM.
+          kill -TERM $API_PID
+          for i in $(seq 1 20); do kill -0 $API_PID 2>/dev/null || break; sleep 0.5; done
+          if kill -0 $API_PID 2>/dev/null; then
+            echo "::error::API did not exit after SIGTERM"
+            exit 1
+          fi
+          trap - EXIT
+
+      # The full authentication surface, one production process per mode.
+      # The rate limiter allows ten requests per IP per fifteen minutes, so
+      # proving register, login, rotation, reuse detection, lockout, account
+      # state and the token-defect matrix honestly takes more than ten. Rather
+      # than disable the limiter — which would mean proving a weakened system      # — each mode runs against a freshly started server. No test-only code
+      # path, flag or environment variable is introduced.
+      - name: Compiled build — full authentication suite (Phase 23 W2)
+        env:
+          STORAGE_DIR: ${{ runner.temp }}/ecc-ci-auth-suite
+          P23_AUTH_BASE_PORT: '13320'
+        run: |
+          mkdir -p "$STORAGE_DIR" && chmod 700 "$STORAGE_DIR"
+          cd apps/api
+          node scripts/verify-compiled-auth-suite.mjs
+
+      - name: Artifact sanity — production image inputs are present
+        run: |
+          cd apps/api
+          test -f dist/main.js || { echo "::error::dist/main.js missing"; exit 1; }
+          test -f prisma/schema.prisma || { echo "::error::prisma schema missing"; exit 1; }
+          test -d prisma/migrations || { echo "::error::prisma migrations missing"; exit 1; }
+          if find dist -name '*.spec.js' -o -name '*.test.js' | grep -q .; then
+            echo "::error::test files present in production dist"; exit 1
+          fi
+          if [ -d dist/testing ]; then
+            echo "::error::test helpers present in production dist"; exit 1
+          fi
+
+      # --- Phase 22: the compiled-build authentication round-trip ----------
+      # The suites above all run from TypeScript SOURCE via vitest/SWC. That
+      # toolchain and `tsc` (which produces the shipped dist) disagree about
+      # `design:paramtypes` when a DTO is imported with `import type`: SWC
+      # degrades to `Object` and the ValidationPipe SKIPS validation, tsc emits
+      # `Function` and the pipe RUNS it. So a build could be perfectly green
+      # and still ship an image where every registration and login returned
+      # 400. That is exactly what happened, undetected, until Phase 22 added a
+      # real request against the built output.
+      #
+      # This step therefore drives the COMPILED dist through the real auth
+      # flow, with no bypass of any kind. It runs here rather than only in the
+      # `containers` job so the failure surfaces in about a minute instead of
+      # after a full Docker build.
+      - name: Compiled build — authenticated round-trip (Phase 22)
+        env:
+          STORAGE_DIR: ${{ runner.temp }}/ecc-ci-auth-storage
+          # Phase 24. The secret must be in the STEP environment, not only on
+          # the `node dist/main.js` line. A prefix assignment applies to that
+          # one command, so the harness — a separate `node` invocation in the
+          # same shell — did not see it, printed "skipping the
+          # signature-based token assertions" and exited 0. The step was green
+          # while asserting nothing about signature verification: the same
+          # vacuous-green class Phase 23 found as P-1 and fixed in the suite
+          # driver, still live in this step. Proved locally: without the export
+          # the 13 token-defect cases and the token-lifetime assertions are
+          # skipped; with it they all run and pass.
+          JWT_ACCESS_SECRET: ci-only-production-contract-value-32-chars-min
+        run: |
+          cd apps/api
+          mkdir -p "$STORAGE_DIR" && chmod 700 "$STORAGE_DIR"
+          NODE_ENV=production \
+          DATABASE_URL="postgresql://ecc:ecc-ci-secret@localhost:5432/ecc_ci?connection_limit=2" \
+          JWT_ACCESS_SECRET="ci-only-production-contract-value-32-chars-min" \
+          STORAGE_DIR="$STORAGE_DIR" \
+          PORT=3124 node dist/main.js &
+          API_PID=$!
+          trap 'kill -TERM $API_PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3124/api/v1/health/ready >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          node scripts/verify-compiled-auth.mjs http://127.0.0.1:3124/api/v1
+          kill -TERM $API_PID
+          for i in $(seq 1 20); do kill -0 $API_PID 2>/dev/null || break; sleep 0.5; done
+          if kill -0 $API_PID 2>/dev/null; then
+            echo "::error::API did not exit after SIGTERM"
+            exit 1
+          fi
+          trap - EXIT
+
   mobile:
     name: Mobile — typecheck and tests
     runs-on: ubuntu-latest
@@ -81,7 +294,8 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 24 — see the api job for the full pnpm/engines analysis.
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Mobile typecheck
@@ -101,7 +315,8 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 24 — see the api job for the full pnpm/engines analysis.
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Web typecheck
@@ -112,3 +327,134 @@ jobs:
         run: pnpm --filter @ecc/web test
       - name: Web build
         run: pnpm --filter @ecc/web build
+
+  # --- Phase 23: release-assurance gates ---------------------------------
+  #
+  # These are the checks that need a real PostgreSQL or a long build, so they
+  # are a separate job: a migration regression should not be masked by the
+  # container job's 30-minute timeout, and neither should hide the other.
+
+  release:
+    name: Release — migrations, release artifacts, security regression sweeps
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ecc
+          POSTGRES_PASSWORD: ecc-ci-secret
+          POSTGRES_DB: ecc_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ecc -d ecc_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ecc:ecc-ci-secret@localhost:5432/ecc_ci
+      JWT_ACCESS_SECRET: ci-only-secret-value-min-32-chars-0000000000
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 — see the api job for the pnpm/engines analysis.
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Generate Prisma client
+        run: pnpm --filter @ecc/api exec prisma generate
+
+      # W9. This script creates and destroys its OWN throwaway PostgreSQL
+      # container, so it cannot touch this job's service database or a
+      # developer's. It covers: schema validation, `migrate status` on an
+      # empty database, `migrate deploy`, status after deploy, a repeated
+      # deploy as a no-op, reproducibility onto a second empty database,
+      # destructive-statement review, and the application booting and
+      # authenticating against the freshly migrated schema.
+      - name: Database — migration safety on throwaway databases (Phase 23 W9)
+        run: bash scripts/verify-db-migrations.sh
+
+      - name: API build (for the artifact checks)
+        run: pnpm --filter @ecc/api build
+
+      # W10. Proves the artifact contains what the source claims: a clean,
+      # warm and stale-tsbuildinfo build each emit the entry point; dist is
+      # 1:1 with source; no test, spec, fixture, raw TypeScript, credential
+      # or unresolved require() is present; the artifact boots; two clean
+      # builds are byte-identical; and the web build emits a standalone tree
+      # with no baked secret and a runtime-read NEXT_PUBLIC_API_URL.
+      - name: Release artifact — contents, hygiene, reproducibility (Phase 23 W10)
+        run: node scripts/verify-release-artifact.mjs
+
+      # The mutation harnesses are not run in CI: each rebuilds the API image
+      # with --no-cache, which is minutes of compute for a result that does
+      # not change with a code edit. They are run deliberately and recorded in
+      # the phase document. `pnpm --filter @ecc/api verify:metadata:mutate`
+      # and `node scripts/mutate-config-contract.mjs` are cheap enough to run
+      # here, so they are.
+      - name: Mutation — the metadata gate detects the Phase 22 defect class (Phase 23 W1)
+        run: pnpm --filter @ecc/api verify:metadata:mutate
+
+      - name: Mutation — the authorization gate detects removed guards (Phase 23 W3)
+        run: pnpm --filter @ecc/api verify:routes:mutate
+
+      - name: Mutation — the access-token lifetime bound is load-bearing (Phase 24 D-2)
+        run: pnpm --filter @ecc/api verify:lifetime:mutate
+
+      - name: Mutation — the configuration audit detects drift (Phase 23 W5)
+        run: node scripts/mutate-config-contract.mjs
+
+      # Each of these re-runs `pnpm audit` once per mutant, so it costs
+      # minutes; the same trade-off as the harnesses above, and for the same
+      # reason. The F-4 one is here because the rule it proves is a security
+      # claim — "no request is re-dispatched to a configured destination" —
+      # and a claim of that kind is worth the compute once per release.
+      - name: Mutation — the rewrites triage rule sees the form Next.js supports (Phase 25 F-4)
+        run: node scripts/mutate-next-config-rewrites.mjs
+
+      - name: Dependency audit has not been weakened
+        run: git diff --exit-code -- pnpm-lock.yaml
+
+  # --- Phase 20/22: container build and runtime verification ---------------
+  # P19-01: both Dockerfiles were pre-existing from Phase 1 and had never
+  # been built — their runtime stages copied apps/<app>/node_modules, whose
+  # entries are symlinks into the workspace root's node_modules/.pnpm store
+  # that was never copied, so neither image could start. This job builds
+  # both images for real and runs them. The script creates and destroys its
+  # own throwaway PostgreSQL container, so it needs no service and never
+  # touches a developer or CI database.
+  #
+  # Phase 22 added the authenticated register/login/protected-request
+  # round-trip and the escaping-symlink check. Those exist because a
+  # production image once shipped in which `POST /auth/register` and
+  # `POST /auth/login` returned 400 for every request — the image booted and
+  # served health checks perfectly while authentication was completely
+  # broken. Nothing short of a real request would have caught it.
+  #
+  # Scope is image correctness only: no registry push, no cloud, no
+  # orchestration, no compose deployment, no secrets.
+
+  containers:
+    name: Containers — build API and Web images, verify they run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # pnpm@11.25.0 (packageManager) requires Node >= 22.13; the
+          # Dockerfiles use node:24-alpine for the same reason.
+          node-version: 24
+
+      # Fail fast and loudly if the image build cannot pull its base images or
+      # reach a registry, rather than surfacing as an opaque mid-build failure.
+      - name: Docker is available and responding
+        run: docker version && docker info >/dev/null
+
+      - name: Build images and verify container runtime behaviour
+        run: node scripts/verify-docker-images.mjs

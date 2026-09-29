@@ -2,6 +2,7 @@ import { Controller, Get, Patch, UseGuards, Req, ForbiddenException, NotFoundExc
 
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
+import { UpdateNotificationPreferenceDto } from './dto/update-preference.dto';
 import { NotificationService } from './services/notification.service';
 
 @Controller('notification-preferences')
@@ -23,7 +24,10 @@ export class NotificationPreferenceController {
   }
 
   @Patch()
-  async update(@Body() body: { channel?: string; kind?: string; enabled?: boolean }) {
+  // Phase 24 (D-4): was an inline type literal, whose emitted metatype is
+  // `Object` — a metatype ValidationPipe skips, so this body was bound
+  // unvalidated and then echoed back.
+  async update(@Body() body: UpdateNotificationPreferenceDto) {
     return { message: 'Preference updated (stub — architecture ready for Phase 8).', body };
   }
 }

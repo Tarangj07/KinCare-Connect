@@ -1,4 +1,6 @@
-import { IsString, IsNotEmpty, IsOptional, IsUUID, Matches, MinLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsUUID, MinLength } from 'class-validator';
+
+import { IsIsoInstant } from '../../../common/validation/is-iso-instant';
 
 export class CreateAppointmentDto {
   @IsString({ message: 'Title is required.' })
@@ -18,12 +20,14 @@ export class CreateAppointmentDto {
   @IsOptional()
   isTelehealth?: string;
 
-  @Matches(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/, {
-    message: 'startsAt must be ISO 8601 format with timezone.',
-  })
+  // Phase 23 (W4): replaced a shape-only `@Matches` regex, which accepted
+  // impossible-but-well-formed dates such as `2026-13-45T99:99:99.000Z` and
+  // let them reach Prisma as `new Date("Invalid Date")` — an HTTP 500 caused
+  // entirely by client input. See common/validation/is-iso-instant.ts.
+  @IsIsoInstant({ message: 'startsAt must be ISO 8601 format with timezone.' })
   startsAt!: string;
 
-  @Matches(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/, { message: 'endsAt must be ISO 8601 format with timezone.' })
+  @IsIsoInstant({ message: 'endsAt must be ISO 8601 format with timezone.' })
   @IsOptional()
   endsAt?: string;
 
@@ -53,11 +57,11 @@ export class UpdateAppointmentDto {
   @IsOptional()
   isTelehealth?: string;
 
-  @Matches(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/, { message: 'startsAt must be ISO 8601 format with timezone.' })
+  @IsIsoInstant({ message: 'startsAt must be ISO 8601 format with timezone.' })
   @IsOptional()
   startsAt?: string;
 
-  @Matches(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/, { message: 'endsAt must be ISO 8601 format with timezone.' })
+  @IsIsoInstant({ message: 'endsAt must be ISO 8601 format with timezone.' })
   @IsOptional()
   endsAt?: string;
 

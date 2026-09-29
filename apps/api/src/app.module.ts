@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 
-import { resolveJwtAccessSecret } from './config/security-config';
+import { ACCESS_TOKEN_TTL_SECONDS, resolveJwtAccessSecret } from './config/security-config';
 import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './database/prisma.module';
 import { AppointmentModule } from './modules/appointments/appointment.module';
@@ -19,7 +19,9 @@ import { StorageModule } from './storage/storage.module';
     PrismaModule,
     JwtModule.register({
       secret: resolveJwtAccessSecret(),
-      signOptions: { expiresIn: '15m' },
+      // Phase 24 (D-2): the same constant `JwtAuthGuard` verifies against, so
+      // issuance and verification cannot drift apart.
+      signOptions: { expiresIn: ACCESS_TOKEN_TTL_SECONDS },
     }),
     AuthModule,
     HealthModule,

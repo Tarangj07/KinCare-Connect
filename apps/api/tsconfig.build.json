@@ -1,4 +1,27 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Phase 18 (M-01): the production build must ALWAYS emit.
+    //
+    // `nest build` runs with `deleteOutDir: true` (nest-cli.json), which
+    // removes dist/ before compilation, while the inherited
+    // `incremental: true` lets tsc consult tsconfig.build.tsbuildinfo and
+    // decide that every output file is already up to date. After one build
+    // with no source changes, tsc therefore emitted nothing, dist/ stayed
+    // empty, and the command still exited 0 — a silent, misleading success
+    // (verified: `dist/main.js` missing after a second `nest build`).
+    //
+    // Disabling incremental compilation for the build config makes every
+    // production build a full emit that always produces dist/main.js.
+    // Type checking strength is unchanged: `incremental` only controls
+    // whether tsc may skip re-emitting unchanged files, never whether it
+    // type checks them.
+    //
+    // Type checking is unaffected for development: tsconfig.json (used by
+    // `tsc --noEmit` type checking) and tsconfig.test.json keep incremental
+    // compilation, which is safe because `--noEmit` produces no output that
+    // could be deleted underneath tsc.
+    "incremental": false
+  },
   "exclude": ["node_modules", "test", "dist", "src/testing", "**/*spec.ts", "**/*test.ts"]
 }

@@ -6,7 +6,30 @@ import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { Public } from './decorators/public.decorator';
 import { RateLimit } from './decorators/rate-limit.decorator';
-import type { LoginDto, RefreshDto, RegisterDto } from './dto/auth.dto';
+// Phase 22 (F-01, CRITICAL): this MUST be a value import, not `import type`.
+//
+// `import type` is fully elided at compile time, so `emitDecoratorMetadata` has
+// no runtime symbol to reference for a `@Body() dto: RegisterDto` parameter.
+// TypeScript then emits `Function` (not `Object`) into `design:paramtypes`,
+// and Nest's ValidationPipe — whose `toValidate()` skip-list is
+// [String, Boolean, Number, Array, Object, Buffer, Date] — does not skip
+// `Function`. It therefore runs class-validator against a constructor that
+// carries none of the DTO's constraints, and `forbidNonWhitelisted: true`
+// rejects every supplied property:
+//
+//   POST /api/v1/auth/register  -> 400 "property email should not exist"
+//   POST /api/v1/auth/login     -> 400 "property email should not exist"
+//
+// i.e. no user could register or obtain an access token in a production image.
+// The test suites did not catch it because vitest/SWC emits
+// `typeof RegisterDto === "undefined" ? Object : RegisterDto`, which degrades to
+// `Object` and is therefore SKIPPED by the pipe — the two toolchains disagree
+// and only the tsc output ships. Importing the DTOs as values keeps the import
+// alive, so `design:paramtypes` carries the real class and the declared
+// validation actually runs. `scripts/verify-docker-images.mjs` now performs a
+// real register/login/me round-trip against the built image so this class of
+// build-output defect can never again be invisible.
+import { LoginDto, RefreshDto, RegisterDto } from './dto/auth.dto';
 import { JwtAuthGuard } from './guards/auth.guard';
 
 interface JwtUser {

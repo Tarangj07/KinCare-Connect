@@ -9,6 +9,7 @@ import { RolesGuard } from '../../auth/guards/roles.guard';
 import { AuthorizationService } from '../../auth/authorization.service';
 import { FeedService } from './services/feed.service';
 import { CreateFamilyUpdateDto } from './dto/create-update.dto';
+import { UpdateFamilyUpdateDto } from './dto/update-update.dto';
 
 @Controller('seniors/:seniorId/feed')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -73,9 +74,13 @@ export class FeedController {
   async update(
     @Param('seniorId') seniorId: string,
     @Param('updateId') updateId: string,
-    @Body() dto: Partial<CreateFamilyUpdateDto>,
+    // Phase 24 (D-4): was `Partial<CreateFamilyUpdateDto>`, whose emitted
+    // metatype is `Object` — a metatype the ValidationPipe skips, so this
+    // route took an entirely unvalidated body. See UpdateFamilyUpdateDto.
+    @Body() dto: UpdateFamilyUpdateDto,
     @Req() req: Request,
   ) {
+    void dto;
     await this.assertAccess(req, seniorId);
     const userId = (req as Request & { user: { sub: string } }).user.sub;
     const role = await this.authorizationService.getMemberRole(userId, seniorId);

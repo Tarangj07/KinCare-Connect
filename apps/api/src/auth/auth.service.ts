@@ -4,7 +4,7 @@ import * as argon2 from 'argon2';
 import { timingSafeEqual } from 'crypto';
 
 import { PrismaService } from '../database/prisma.service';
-import { generateTokenId, generateTokenSecret, hashToken, resolveJwtAccessSecret } from '../config/security-config';
+import { ACCESS_TOKEN_TTL_SECONDS, generateTokenId, generateTokenSecret, hashToken, resolveJwtAccessSecret } from '../config/security-config';
 
 export interface LoginResult {
   user: { id: string; email: string; fullName: string; globalRole: string };
@@ -283,7 +283,10 @@ export class AuthService {
   }
 
   private generateAccessToken(userId: string, email: string, globalRole: string): string {
-    return this.jwt.sign({ sub: userId, email, role: globalRole }, { expiresIn: '15m', secret: resolveJwtAccessSecret() });
+    // Phase 24 (D-2): the literal '15m' here and in AppModule's signOptions
+    // were two independent copies of the same policy, and neither constrained
+    // the verifier. All three now read ACCESS_TOKEN_TTL_SECONDS.
+    return this.jwt.sign({ sub: userId, email, role: globalRole }, { expiresIn: ACCESS_TOKEN_TTL_SECONDS, secret: resolveJwtAccessSecret() });
   }
 
   /**

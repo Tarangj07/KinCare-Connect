@@ -1,4 +1,6 @@
-import { IsObject, IsString, IsNotEmpty, IsOptional, IsUUID, Matches, IsIn, IsInt, Min, Max } from 'class-validator';
+import { IsObject, IsString, IsNotEmpty, IsOptional, IsUUID, IsIn, IsInt, Min, Max, Matches } from 'class-validator';
+
+import { IsIsoInstant } from '../../../common/validation/is-iso-instant';
 
 /**
  * Create a health measurement for a senior.
@@ -19,7 +21,7 @@ export class CreateHealthMeasurementDto {
   @IsObject({ message: 'value must be a JSON object.' })
   value!: Record<string, unknown>;
 
-  @Matches(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/, { message: 'measuredAt must be ISO 8601 with timezone.' })
+  @IsIsoInstant({ message: 'measuredAt must be ISO 8601 with timezone.' })
   measuredAt!: string;
 
   @IsIn(['MANUAL', 'DEVICE', 'IMPORT', 'SYSTEM'])
@@ -36,11 +38,11 @@ export class HealthMeasurementFilterDto {
   @IsOptional()
   measurementType?: string;
 
-  @Matches(/\d{4}-\d{2}-\d{2}/)
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'from must be YYYY-MM-DD.' })
   @IsOptional()
   from?: string;
 
-  @Matches(/\d{4}-\d{2}-\d{2}/)
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'to must be YYYY-MM-DD.' })
   @IsOptional()
   to?: string;
 

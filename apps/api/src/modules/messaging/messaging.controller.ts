@@ -9,6 +9,7 @@ import { RolesGuard } from '../../auth/guards/roles.guard';
 import { AuthorizationService } from '../../auth/authorization.service';
 import { MessagingService } from './services/messaging.service';
 import { CreateMessageDto } from './dto/create-message.dto';
+import { AddConversationParticipantDto } from './dto/add-participant.dto';
 
 /**
  * Secure messaging endpoints — Phase 11.
@@ -102,13 +103,14 @@ export class MessagingController {
   async addParticipant(
     @Param('seniorId') seniorId: string,
     @Param('conversationId') conversationId: string,
-    @Body('targetUserId') targetUserId: string,
+    @Body() dto: AddConversationParticipantDto,
     @Req() req: Request,
   ) {
     const userId = this.getUserId(req);
-    if (!targetUserId || typeof targetUserId !== 'string') {
-      throw new ForbiddenException('targetUserId is required.');
-    }
-    return this.messagingService.addParticipant(seniorId, conversationId, userId, targetUserId);
+    // Phase 25 (F-3): the shape check moved into the DTO's class-validator
+    // constraints, so the whole request body is whitelisted and an unexpected
+    // property is a 400 instead of a silent no-op. `ForbiddenException` is no
+    // longer raised here; a malformed body is a 400 from ValidationPipe.
+    return this.messagingService.addParticipant(seniorId, conversationId, userId, dto.targetUserId);
   }
 }
