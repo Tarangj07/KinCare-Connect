@@ -401,6 +401,23 @@ jobs:
       - name: Release artifact — contents, hygiene, reproducibility (Phase 23 W10)
         run: node scripts/verify-release-artifact.mjs
 
+      # --- Phase 29: Phase 28's storage-backup gate -------------------------
+      #
+      # The reviewer of Phase 28 recorded that this gate existed and ran only
+      # on a laptop. A gate nobody runs is a convention, so it is wired in
+      # here. It is deliberately placed IMMEDIATELY AFTER the release-artifact
+      # check and BEFORE the mutation harnesses: it loads the REAL compiled
+      # `StorageService` out of `dist/storage/storage.service.js`, so it must
+      # read a dist that the artifact gate has just proved is clean, complete
+      # and reproducible. Running it after a harness that rebuilds dist would
+      # make its result depend on harness internals.
+      #
+      # Properties that made it cheap enough for CI: no database, no Docker, no
+      # network, and no access to anything outside a `mkdtemp` tree it creates
+      # and removes in a `finally`. Measured locally at 0.37s / 22 checks.
+      - name: Storage backup — STORAGE_DIR archive, destroy, restore, re-verify (Phase 28 WS2)
+        run: pnpm --filter @ecc/api verify:storage:backup
+
       # The mutation harnesses are not run in CI: each rebuilds the API image
       # with --no-cache, which is minutes of compute for a result that does
       # not change with a code edit. They are run deliberately and recorded in
@@ -416,6 +433,26 @@ jobs:
       - name: Mutation — the access-token lifetime bound is load-bearing (Phase 24 D-2)
         run: pnpm --filter @ecc/api verify:lifetime:mutate
 
+      # --- Phase 29: the Phase 28 N-12 regression guard ---------------------
+      #
+      # Phase 28 fixed N-12 (the rate limiter refused with 403, which clients
+      # correctly treat as "your session is not authorised" and which the
+      # mobile client acted on by deleting the session). The fix came with a
+      # source-level regression suite AND this mutation harness that proves
+      # the suite fails when the protection is removed.
+      #
+      # The container job also exercises the N-12 behaviour end to end, but
+      # only inside `verify-docker-images.mjs`, minutes into a full image
+      # build. This harness runs in about a minute with no Docker, so a
+      # 429->403 revert surfaces here first. It is here at all because the
+      # Phase 28 reviewer found it ran only when a human remembered.
+      #
+      # It MUTATES SOURCE in place and restores it, asserting byte-identity
+      # itself; that is the same contract every other mutate-* harness in this
+      # job already has. It is sequential with them for that reason.
+      - name: Mutation — the N-12 429 contract is load-bearing (Phase 28)
+        run: pnpm --filter @ecc/api verify:ratelimit:n12:mutate
+
       - name: Mutation — the configuration audit detects drift (Phase 23 W5)
         run: node scripts/mutate-config-contract.mjs
 
@@ -426,6 +463,54 @@ jobs:
       # and a claim of that kind is worth the compute once per release.
       - name: Mutation — the rewrites triage rule sees the form Next.js supports (Phase 25 F-4)
         run: node scripts/mutate-next-config-rewrites.mjs
+
+      # --- Phase 29: the Phase 28 DB-suite driver ---------------------------
+      #
+      # `run-db-suites.mjs` provisions its OWN throwaway PostgreSQL, migrates
+      # it, and runs the database-backed suites against it. The `api` job also
+      # runs those suites, but against a long-lived service database that other
+      # steps in that job have already written to (the startup smoke test
+      # registers and authenticates a real user), and it never runs
+      # `test:all`, which is the only configuration in which the unit and
+      # integration suites are executed in the SAME process against the SAME
+      # database — the configuration in which cross-suite state leaks would
+      # show up. That is what this step adds; it is not a duplicate of the
+      # `api` job.
+      #
+      # It needs Docker, which ubuntu-latest provides, and it needs no
+      # credentials: the database name is generated per run and prefixed, so
+      # the developer `ecc` database is not reachable even by a bug.
+      - name: Database-backed suites — e2e and unit+integration on a fresh throwaway PostgreSQL (Phase 28)
+        run: node scripts/run-db-suites.mjs
+
+      # --- Phase 29: the CI contract protects itself ------------------------
+      #
+      # `--list` is the structural half of the parity script: it enforces
+      # REQUIRED_GATES, the advisory/`|| true` rules, Node-version agreement
+      # and the containers-job check, and it executes NOTHING. The default
+      # (executing) mode is deliberately not used here — it re-runs almost
+      # every step in this workflow, which would double the job's cost for no
+      # additional coverage.
+      #
+      # This step is the reason a Phase 28 gate cannot silently fall out of CI
+      # again. The Phase 28 review found three gates that existed, were
+      # green locally, and were wired into neither this file nor the parity
+      # contract; without this step even the fix for that would have been
+      # unenforced.
+      - name: CI contract — the workflow satisfies the parity contract (Phase 29)
+        run: node scripts/verify-ci-parity.mjs --list
+
+      # --- Phase 29: the CI integration is itself mutation-tested ----------
+      #
+      # The wiring above is only worth something if removing it is detectable.
+      # This harness mutates a THROWAWAY COPY of `.github/workflows/ci.yml`
+      # and `scripts/verify-ci-parity.mjs` — never the checked-out files — so
+      # a defect in the harness cannot leave a mutated workflow behind for the
+      # remaining steps, which is the failure mode (N-10) that bit this
+      # project before. It asserts the real files are byte-identical when it
+      # finishes regardless of outcome.
+      - name: Mutation — removing a required Phase 28 gate from CI is detected (Phase 29)
+        run: node scripts/mutate-ci-integration.mjs
 
       - name: Dependency audit has not been weakened
         run: git diff --exit-code -- pnpm-lock.yaml

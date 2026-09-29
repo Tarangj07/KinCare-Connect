@@ -37,7 +37,7 @@
  * truthful result. The developer database `ecc` is never a target.
  */
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -225,25 +225,347 @@ if (!runSteps.some((s) => s.job === 'containers' && /verify-docker-images/.test(
   problems.push('the containers job does not run the container verification gate');
 }
 
-// Every gate this phase added must be wired in, or it only runs on a laptop.
+// Every gate this project added must be wired in, or it only runs on a laptop.
+// Phase 29 (F-2). The independent Phase 28 review found three gates that were
+// fully implemented, green locally, and present in NEITHER `ci.yml` NOR this
+// list: `mutate-rate-limit-n12.mjs`, `verify-storage-backup-restore.mjs` and
+// `run-db-suites.mjs`. A gate nobody runs is a convention, so all three are
+// here now, along with this script and its own mutation harness — a contract
+// that is not itself enforced is how the gap happened.
+//
+// The match is STRUCTURED, not textual. The previous revision of this file
+// asserted `workflowText.includes(gate.name)`, which is defeated by a YAML
+// comment: delete the step, mention the script name in a comment, and the
+// build stays green while the gate stops running. Each gate is instead
+// matched against the PARSED `run` command of a real step, as a
+// whitespace-delimited token, with shell comments stripped first — a second
+// bypass that `includes()` also missed. Because matching is on whole tokens,
+// `verify:metadata` is NOT satisfied by the `verify:metadata:mutate` step;
+// the two are separate gates and either can be deleted alone.
+//
+// Each gate additionally declares the artefact it ultimately invokes, and this
+// script asserts that artefact EXISTS. That is the "CI claims to run a gate
+// but the command is broken" case, caught structurally before a runner is
+// ever needed: renaming `verify-storage-backup-restore.mjs`, or deleting the
+// `verify:storage:backup` entry from `apps/api/package.json`, fails here.
 const REQUIRED_GATES = [
-  { name: 'verify:metadata', why: 'Phase 23 W1 — the gate that would have caught the Phase 22 defect before release' },
-  { name: 'verify:routes', why: 'Phase 23 W3 — structural authorization over the compiled route table' },
-  { name: 'verify-config-contract.mjs', why: 'Phase 23 W5 — environment/version/secret contract' },
-  { name: 'verify-dependency-audit.mjs', why: 'Phase 23 W6 — lockfile and native-module verification' },
-  { name: 'triage-vulnerabilities.mjs', why: 'Phase 23 W6 — reachable-advisory triage' },
-  { name: 'verify-compiled-auth-suite.mjs', why: 'Phase 23 W2 — the full authentication surface on the built artifact' },
-  { name: 'verify-db-migrations.sh', why: 'Phase 23 W9 — migration safety on throwaway databases' },
-  { name: 'verify-release-artifact.mjs', why: 'Phase 23 W10 — release artifact integrity' },
-  { name: 'verify:metadata:mutate', why: 'Phase 23 W1 — proof the gate detects the defect class' },
-  { name: 'verify:routes:mutate', why: 'Phase 23 W3 — proof the authorization gate detects a removed guard' },
-  { name: 'mutate-config-contract.mjs', why: 'Phase 23 W5 — proof the configuration audit detects drift' },
-  { name: 'verify:lifetime:mutate', why: 'Phase 24 D-2 — proof the access-token lifetime bound is load-bearing' },
+  {
+    id: 'p23-w1-metadata',
+    gate: 'verify:metadata',
+    why: 'Phase 23 W1 — the gate that would have caught the Phase 22 defect before release',
+    target: { kind: 'packageScript', pkg: 'apps/api', script: 'verify:metadata' },
+  },
+  {
+    id: 'p23-w3-routes',
+    gate: 'verify:routes',
+    why: 'Phase 23 W3 — structural authorization over the compiled route table',
+    target: { kind: 'packageScript', pkg: 'apps/api', script: 'verify:routes' },
+  },
+  {
+    id: 'p23-w5-config',
+    gate: 'verify-config-contract.mjs',
+    why: 'Phase 23 W5 — environment/version/secret contract',
+    target: { kind: 'file', file: 'scripts/verify-config-contract.mjs' },
+  },
+  {
+    id: 'p23-w6-audit',
+    gate: 'verify-dependency-audit.mjs',
+    why: 'Phase 23 W6 — lockfile and native-module verification',
+    target: { kind: 'file', file: 'scripts/verify-dependency-audit.mjs' },
+  },
+  {
+    id: 'p23-w6-triage',
+    gate: 'triage-vulnerabilities.mjs',
+    why: 'Phase 23 W6 — reachable-advisory triage',
+    target: { kind: 'file', file: 'scripts/triage-vulnerabilities.mjs' },
+  },
+  {
+    id: 'p23-w2-auth-suite',
+    gate: 'verify-compiled-auth-suite.mjs',
+    why: 'Phase 23 W2 — the full authentication surface on the built artifact',
+    target: { kind: 'file', file: 'apps/api/scripts/verify-compiled-auth-suite.mjs' },
+  },
+  {
+    id: 'p23-w9-migrations',
+    gate: 'verify-db-migrations.sh',
+    why: 'Phase 23 W9 — migration safety on throwaway databases',
+    target: { kind: 'file', file: 'scripts/verify-db-migrations.sh' },
+  },
+  {
+    id: 'p23-w10-artifact',
+    gate: 'verify-release-artifact.mjs',
+    why: 'Phase 23 W10 — release artifact integrity',
+    target: { kind: 'file', file: 'scripts/verify-release-artifact.mjs' },
+  },
+  {
+    id: 'p23-w1-metadata-mutate',
+    gate: 'verify:metadata:mutate',
+    why: 'Phase 23 W1 — proof the gate detects the defect class',
+    target: { kind: 'packageScript', pkg: 'apps/api', script: 'verify:metadata:mutate' },
+  },
+  {
+    id: 'p23-w3-routes-mutate',
+    gate: 'verify:routes:mutate',
+    why: 'Phase 23 W3 — proof the authorization gate detects a removed guard',
+    target: { kind: 'packageScript', pkg: 'apps/api', script: 'verify:routes:mutate' },
+  },
+  {
+    id: 'p23-w5-config-mutate',
+    gate: 'mutate-config-contract.mjs',
+    why: 'Phase 23 W5 — proof the configuration audit detects drift',
+    target: { kind: 'file', file: 'scripts/mutate-config-contract.mjs' },
+  },
+  {
+    id: 'p24-d2-lifetime-mutate',
+    gate: 'verify:lifetime:mutate',
+    why: 'Phase 24 D-2 — proof the access-token lifetime bound is load-bearing',
+    target: { kind: 'packageScript', pkg: 'apps/api', script: 'verify:lifetime:mutate' },
+  },
+
+  // --- Phase 28 gates, wired in by Phase 29 after the independent review ---
+  {
+    id: 'p28-n12-mutate',
+    gate: 'verify:ratelimit:n12:mutate',
+    why: 'Phase 28 N-12 — proof the 429 rate-limit contract is load-bearing and the 403 authorization contract is still asserted',
+    target: { kind: 'packageScript', pkg: 'apps/api', script: 'verify:ratelimit:n12:mutate' },
+    // Exact, because this command takes `--only`. A step reading
+    // `verify:ratelimit:n12:mutate --only M-N12-1` would pass a token match
+    // while running 1 of 8 mutants — a green build that checks almost
+    // nothing. Equivalence is therefore asserted on the whole command.
+    exactCommand: 'pnpm --filter @ecc/api verify:ratelimit:n12:mutate',
+  },
+  {
+    id: 'p28-storage-backup',
+    gate: 'verify:storage:backup',
+    why: 'Phase 28 WS2 — STORAGE_DIR archive/destroy/restore re-verified against the real compiled StorageService',
+    target: { kind: 'packageScript', pkg: 'apps/api', script: 'verify:storage:backup' },
+    exactCommand: 'pnpm --filter @ecc/api verify:storage:backup',
+  },
+  {
+    id: 'p28-db-suites',
+    gate: 'run-db-suites.mjs',
+    why: 'Phase 28 — the database-backed suites on a fresh throwaway PostgreSQL, in the one configuration that runs unit and integration in the same process',
+    target: { kind: 'file', file: 'scripts/run-db-suites.mjs' },
+    exactCommand: 'node scripts/run-db-suites.mjs',
+  },
+
+  // --- The CI contract protecting itself ----------------------------------
+  {
+    id: 'p29-ci-parity',
+    gate: 'verify-ci-parity.mjs',
+    why: 'Phase 29 — this list is worthless unless the thing that enforces it also runs in CI',
+    target: { kind: 'file', file: 'scripts/verify-ci-parity.mjs' },
+    // `--list` is the structural half and executes nothing. Without the flag
+    // the default mode re-runs nearly every step in the workflow, which would
+    // double this job's cost for no coverage.
+    exactCommand: 'node scripts/verify-ci-parity.mjs --list',
+  },
+  {
+    id: 'p29-ci-integration-mutate',
+    gate: 'mutate-ci-integration.mjs',
+    why: 'Phase 29 — proof that deleting a required Phase 28 gate from CI is detected rather than merely intended',
+    target: { kind: 'file', file: 'scripts/mutate-ci-integration.mjs' },
+    exactCommand: 'node scripts/mutate-ci-integration.mjs',
+  },
 ];
-const workflowText = readFileSync(workflowPath, 'utf8');
+
+/**
+ * Strip shell comments from a `run:` body.
+ *
+ * YAML comments are already gone by this point — they are removed by the
+ * parser — but a *shell* comment inside a `run: |` block is not, and
+ * `# node scripts/run-db-suites.mjs` on its own line is the cheapest possible
+ * way to satisfy a text match while executing nothing. A `#` that begins a
+ * word and is not inside quotes starts a comment to end of line.
+ */
+function stripShellComments(run) {
+  return run
+    .split('\n')
+    .map((line) => {
+      let quote = null;
+      for (let i = 0; i < line.length; i += 1) {
+        const ch = line[i];
+        if (quote) {
+          if (ch === quote && line[i - 1] !== '\\') quote = null;
+          continue;
+        }
+        if (ch === "'" || ch === '"') {
+          quote = ch;
+          continue;
+        }
+        if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
+          return line.slice(0, i);
+        }
+      }
+      return line;
+    })
+    .join('\n');
+}
+
+/** Collapse every whitespace run, so indentation and wrapping cannot matter. */
+function normaliseCommand(run) {
+  return stripShellComments(run).replace(/\s+/g, ' ').trim();
+}
+
+function commandTokens(run) {
+  return normaliseCommand(run).split(' ').filter(Boolean);
+}
+
+/**
+ * Does this step's command actually invoke `gate`?
+ *
+ * A token match, not a substring match, and tolerant of a path prefix
+ * (`scripts/verify-db-migrations.sh` satisfies `verify-db-migrations.sh`) but
+ * not of a longer identifier (`verify:metadata:mutate` does NOT satisfy
+ * `verify:metadata`).
+ */
+function stepInvokesGate(step, gate) {
+  return commandTokens(step.run).some((tok) => tok === gate || tok.endsWith(`/${gate}`));
+}
+
+/**
+ * Does this package script name a file that must exist?
+ *
+ * The packageScript target check only proves the ENTRY POINT is declared. An
+ * earlier version of this contract stopped there, and mutation C17 caught the
+ * gap: renaming `verify-storage-backup-restore.mjs` and updating the package
+ * script to match left the contract fully satisfied, while a gate the reviewer
+ * would call "wired in" pointed at a file that had moved. The entry point is
+ * therefore resolved to the script it invokes and that file is checked too.
+ *
+ * Only tokens that are unambiguously file paths are checked — they contain a
+ * `/` and their last segment has an extension — so an unrelated token like a
+ * port number or a flag cannot produce a spurious failure.
+ */
+function fileTokensOfScript(body) {
+  return body
+    .split(/\s+/)
+    .map((t) => t.replace(/^['"]|['"]$/g, ''))
+    .filter((t) => t.includes('/') && !t.startsWith('-') && /\.[A-Za-z0-9]+$/.test(t.split('/').pop() ?? ''));
+}
+
+function gateTargetProblem(target) {
+  if (target.kind === 'file') {
+    const abs = path.join(repoRoot, target.file);
+    if (!existsSync(abs)) {
+      return `the script it runs, \`${target.file}\`, does not exist. CI would run a command that cannot work.`;
+    }
+    return null;
+  }
+  if (target.kind === 'packageScript') {
+    const pkgDir = path.join(repoRoot, target.pkg);
+    const pkgPath = path.join(pkgDir, 'package.json');
+    if (!existsSync(pkgPath)) return `\`${target.pkg}/package.json\` does not exist.`;
+    let scripts;
+    try {
+      scripts = JSON.parse(readFileSync(pkgPath, 'utf8')).scripts ?? {};
+    } catch (err) {
+      return `\`${target.pkg}/package.json\` is not parseable JSON: ${err.message}`;
+    }
+    if (!Object.hasOwn(scripts, target.script)) {
+      return (
+        `the package script \`${target.script}\` is not defined in \`${target.pkg}/package.json\`. ` +
+        'The workflow invokes it, so the step would fail on the runner.'
+      );
+    }
+    for (const token of fileTokensOfScript(scripts[target.script])) {
+      const abs = path.resolve(pkgDir, token);
+      if (!existsSync(abs)) {
+        return (
+          `the package script \`${target.script}\` is \`${scripts[target.script]}\`, but ` +
+          `\`${token}\` does not exist. The gate is wired to a command that cannot work.`
+        );
+      }
+    }
+    return null;
+  }
+  return `unknown target kind \`${target.kind}\` — the gate contract itself is malformed.`;
+}
+
+/**
+ * Constructs that make a check un-failable no matter what the step says.
+ * These are checked per required gate, because a required gate is by
+ * definition a check, and a check that cannot fail is not a check.
+ */
+function suppressionProblem(step) {
+  const cmd = normaliseCommand(step.run);
+  if (step.continueOnError) {
+    return 'it is `continue-on-error`, so a failure is reported and then ignored — the build stays green';
+  }
+  if (/^\s*set\s+\+e\s*$/m.test(step.run)) {
+    return 'it uses `set +e`, so a failing command does not fail the step';
+  }
+  for (const construct of ['|| true', '|| :', '|| echo', '&& exit 0', '2>/dev/null || true']) {
+    if (cmd.includes(construct)) {
+      return `it contains \`${construct}\`, which suppresses the failure of the command it guards`;
+    }
+  }
+  return null;
+}
+
 for (const gate of REQUIRED_GATES) {
-  if (!workflowText.includes(gate.name)) {
-    problems.push(`the gate \`${gate.name}\` is not wired into CI. ${gate.why}. A gate that only runs locally is a convention.`);
+  const invoking = runSteps.filter((s) => stepInvokesGate(s, gate.gate));
+  if (invoking.length === 0) {
+    problems.push(
+      `the gate \`${gate.gate}\` (${gate.id}) is not wired into CI as a step command. ${gate.why}. ` +
+        'A gate that only runs locally is a convention. Note that a comment mentioning the name does not count.',
+    );
+    continue;
+  }
+  // At least one invoking step must be a real gate. If every step that names
+  // this gate is advisory, the build reports green either way.
+  const realGate = invoking.filter((s) => !s.continueOnError);
+  if (realGate.length === 0) {
+    problems.push(
+      `the gate \`${gate.gate}\` (${gate.id}) is only ever invoked by an advisory step, so a failure ` +
+        'cannot fail the build.',
+    );
+  }
+  for (const s of invoking) {
+    const suppression = suppressionProblem(s);
+    if (suppression) {
+      problems.push(
+        `step "${s.name}" runs the required gate \`${gate.gate}\` (${gate.id}) but ${suppression}. ` +
+          'A required gate that cannot fail is not a gate.',
+      );
+    }
+  }
+  if (gate.exactCommand) {
+    const exact = runSteps.filter((s) => normaliseCommand(s.run) === gate.exactCommand);
+    if (exact.length === 0) {
+      const near = invoking
+        .map((s) => `"${s.name}" runs \`${normaliseCommand(s.run)}\``)
+        .join('; ');
+      problems.push(
+        `the required gate \`${gate.gate}\` (${gate.id}) is invoked by a NON-EQUIVALENT command. ` +
+          `Expected exactly \`${gate.exactCommand}\`. ` +
+          (near ? `Found: ${near}. ` : '') +
+          'Options, filters or flags added to a required gate can narrow it to a fraction of its coverage while still looking wired in.',
+      );
+    }
+  }
+  const targetProblem = gateTargetProblem(gate.target);
+  if (targetProblem) {
+    problems.push(`the required gate \`${gate.gate}\` (${gate.id}) cannot run: ${targetProblem} ${gate.why}.`);
+  }
+}
+
+// The contract is only meaningful if it is non-trivial. A list accidentally
+// emptied would make every check above vacuously pass, which is precisely the
+// "green that means nothing" outcome this script exists to prevent.
+if (REQUIRED_GATES.length < 17) {
+  problems.push(
+    `the required-gate contract has only ${REQUIRED_GATES.length} entries; 17 are expected. ` +
+      'An emptied or truncated list makes every gate check above vacuously pass.',
+  );
+}
+const phase28GateIds = ['p28-n12-mutate', 'p28-storage-backup', 'p28-db-suites'];
+for (const id of phase28GateIds) {
+  if (!REQUIRED_GATES.some((g) => g.id === id)) {
+    problems.push(
+      `the required-gate contract no longer contains the Phase 28 gate \`${id}\`. This is the exact ` +
+        'omission the independent Phase 28 review recorded as F-2; the contract must name it explicitly.',
+    );
   }
 }
 
