@@ -17,8 +17,12 @@ phase report, and it does not modify `SECURITY_REVIEW_*` or
 | --- | --- |
 | Starting local HEAD | `d0cd0dd2f175ae881bd201eb26d7e74a0c4158be` |
 | Starting `origin/main` | `d06e6f83f1f3150034e816a224f8dd59a95ef5a6` |
-| **Final local HEAD** | **`61134d7ca2e8b50b553bbc7922d80c8585058428`** |
-| **Final `origin/main`** | **`61134d7ca2e8b50b553bbc7922d80c8585058428`** |
+| Final local HEAD before the checkpoint record | `61134d7ca2e8b50b553bbc7922d80c8585058428` |
+| **Final local HEAD** | **`16dac73cd1599a61f61362706f9657d08e584772`** |
+| **Final `origin/main`** | **`16dac73cd1599a61f61362706f9657d08e584772`** |
+
+`16dac73` is this checkpoint document, added after run 2 so the record of the
+reconciliation is itself committed and pushed.
 
 Local and remote are identical. Working tree clean.
 
@@ -272,6 +276,24 @@ local verification structurally cannot.
 - An AST-gate defect where a relative path was resolved against the process cwd
   instead of the repo root was caught by the mutation harness.
 
+### 8.1 GitHub Actions — run 3: `36559104224` — **SUCCESS** (final SHA)
+
+- URL: https://github.com/Tarangj07/KinCare-Connect/actions/runs/36559104224
+- Commit: `16dac73` (the final HEAD, including this checkpoint record)
+- Conclusion: **success** — all 5 jobs green
+
+This is the definitive run for the repository's current `main`. Run 2
+(`36558509809`) is the first fully green run and the one in which the ordering
+fix is proven; run 3 confirms the tip of `main` is green as committed.
+
+Run summary across the checkpoint:
+
+| Run | Commit | Conclusion |
+| --- | ------ | ---------- |
+| `36557892479` | `d9320ae` | **failure** — real workflow ordering defect |
+| `36558509809` | `61134d7` | **success** — 5/5 jobs |
+| `36559104224` | `16dac73` | **success** — 5/5 jobs (final SHA) |
+
 ## 10. Integrity after reconciliation
 
 - **Security controls:** all present — `security-config.ts`,
@@ -319,8 +341,9 @@ local verification structurally cannot.
 - The full local gate suite is green on the merged tree, with lint exactly at
   the 55/69 baseline.
 - **GitHub Actions has now genuinely executed against this repository and
-  completed successfully** — run `36558509809`, commit `61134d7`, 5/5 jobs
-  green, on a clean checkout.
+  completed successfully.** Two consecutive green runs on clean checkouts:
+  `36558509809` (commit `61134d7`) and, at the final SHA,
+  **`36559104224` (commit `16dac73`)** — both 5/5 jobs green.
 - A real workflow defect invisible to local verification was found and fixed by
   that run.
 
