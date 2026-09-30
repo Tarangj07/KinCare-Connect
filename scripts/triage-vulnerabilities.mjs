@@ -44,7 +44,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { analyseNextConfig } from './lib/next-config-features.mjs';
+import { analyseNextConfig, readNextConfigValue } from './lib/next-config-features.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const asJson = process.argv.includes('--json');
@@ -154,6 +154,24 @@ function nextConfig() {
 function nextConfigHas(key) {
   const a = nextConfig();
   return a.features.includes(key);
+}
+
+/**
+ * The exported Next config's SOURCE TEXT, for the value-level reads that
+ * `analyseNextConfig` cannot express.
+ *
+ * Phase 36 (P35-1): `images` is a key whose security effect depends on its
+ * VALUE (`unoptimized: true` 404s the optimizer endpoint; `images: {}` does
+ * not), so a presence test is insufficient for the image-optimizer rule. An
+ * absent file yields `''`, which `readNextConfigValue` reports as `known: false`
+ * — i.e. REACHABLE — so a deleted config cannot produce a clearance.
+ */
+let nextConfigSourceCache = null;
+function nextConfigSource() {
+  if (nextConfigSourceCache === null) {
+    nextConfigSourceCache = existsSync(webNextConfig) ? readIfPresent(webNextConfig) : '';
+  }
+  return nextConfigSourceCache;
 }
 
 /**
@@ -286,18 +304,98 @@ const NEXT_FEATURES = [
     id: 'image optimization',
     // Image Optimizer DoS, unbounded disk cache, and the AVIF RCE.
     match: /image optimi[sz]ation|next\/image/i,
+    // Phase 36 (P35-1). Rewritten. The previous version answered this question
+    // from APPLICATION USAGE — no `next/image` import, no `<Image>` element, no
+    // `images` key — and concluded the optimizer was unreachable.
+    //
+    // That inference is invalid, and the Phase 35 review demonstrated it against
+    // the deployed image rather than arguing about it. `/_next/image` is
+    // registered by Next unconditionally: with no images in the app at all it
+    // answered HTTP 200 with the image bytes, unauthenticated, to any client. The
+    // rule even cited "GET /_next/image answered 400" as corroboration, when a
+    // 400 carrying the optimizer's own error string is evidence the endpoint is
+    // PRESENT and executing.
+    //
+    // So the question is no longer "does the app use images?" but "can the
+    // optimizer be entered at all?". In `next/dist/server/next-server.js` the
+    // optimizer branch is taken only when `images.loader` is `default` AND
+    // `images.unoptimized` is falsy; otherwise Next renders a 404 and never
+    // requires the optimizer module. Phase 36 sets `images.unoptimized: true`,
+    // so that branch is unreachable — and the disposition now rests on the
+    // configuration that actually gates it.
+    //
+    // Ordering is deliberate and fails closed at every step:
+    //
+    //   1. An unreadable `images.unoptimized` is REACHABLE. "I could not check
+    //      this" is a finding, never a dismissal.
+    //   2. An explicit falsy value is REACHABLE, whatever the source says. This
+    //      is the condition Phase 35's P35-1 describes, so it must be the one
+    //      this rule is most eager to report.
+    //   3. A non-default loader is REACHABLE on the same conservative reading:
+    //      the loader may still be able to fetch and transform, and this rule
+    //      does not model third-party loaders.
+    //   4. Only a literal `unoptimized: true` with an analysable config and no
+    //      `next/image` usage reaches NOT REACHABLE.
+    //
+    // The claim is verified against the BUILT artifact and the RUNNING server
+    // by `scripts/verify-next-image-optimizer.mjs`, which is wired into CI and
+    // mutation-tested. This rule states the configuration; that gate proves the
+    // runtime consequence. Neither is asked to do the other's job.
     present: () => {
       const src = grepAll(workspaceSrcRoots, ['next/image', '<Image', 'getImageProps']);
-      const a = nextConfig();
-      const config = nextConfigHas('image optimization');
-      if (src || config) return { present: true, how: src || 'the exported Next config declares an `images` key' };
-      if (!a.analysable) return { present: true, how: nextConfigEvidence('images', 'image optimization', '') };
+      const unoptimized = readNextConfigValue(nextConfigSource(), 'images', 'unoptimized');
+      const loader = readNextConfigValue(nextConfigSource(), 'images', 'loader');
+
+      if (unoptimized.known !== true) {
+        return {
+          present: true,
+          how:
+            '`images.unoptimized` could not be read from the exported Next config, so the Image Optimization ' +
+            `endpoint cannot be shown to be disabled: ${unoptimized.reason}. "I could not check this" is a ` +
+            'finding, not a dismissal — read the value and make it a literal, or remove the `images` key.',
+        };
+      }
+      if (unoptimized.value === true) {
+        // The app rendering an <Image> would still work (it renders the plain
+        // src), but the optimizer endpoint is 404ed, so report it precisely
+        // rather than claiming the feature is unused.
+        return {
+          present: false,
+          how:
+            'the exported Next config sets `images.unoptimized: true` at ' +
+            `${unoptimized.at ?? 'the images key'}, so next/dist/server/next-server.js takes the 404 branch for ` +
+            '/_next/image and never requires the optimizer module' +
+            (src ? `. Note the web source does import next/image (${src.split('\n').length} site(s)), which still ` +
+              'renders unoptimized — re-check this rule if the images configuration changes.' : '.') +
+            ' The runtime behaviour is proved against the built artifact and the running standalone server by ' +
+            'scripts/verify-next-image-optimizer.mjs',
+        };
+      }
+      if (loader.known === true && typeof loader.value === 'string' && loader.value !== 'default') {
+        return {
+          present: true,
+          how:
+            `the exported Next config sets \`images.loader: '${loader.value}'\`, a third-party loader this rule ` +
+            'does not model. It may be able to fetch and transform an attacker-supplied image, so the optimizer ' +
+            'is treated as reachable. Model the loader or move to the default loader with `unoptimized: true`.',
+        };
+      }
       return {
-        present: false,
+        present: true,
         how:
-          'no next/image import, no <Image element and no `images` key in the exported Next config; the optimizer ' +
-          'has no loader to invoke. Phase 23 additionally probed the running image: GET /_next/image answered 400 ' +
-          'for both a remote and a local url',
+          `the Image Optimization endpoint is enabled. The exported Next config does not set ` +
+          '`images.unoptimized: true`' +
+          (unoptimized.at === null && unoptimized.value === undefined
+            ? ' (the key is not declared at all, so Next\'s default applies)'
+            : ` — it is explicitly \`${JSON.stringify(unoptimized.value)}\``) +
+          ', and next/dist/server/next-server.js enters the optimizer whenever the loader is `default` and ' +
+          '`unoptimized` is falsy. ' +
+          (src
+            ? `The web source also imports next/image:\n${src}\n`
+            : 'Note that the absence of a next/image import is NOT a defence — Next registers /_next/image ' +
+              'regardless, and Phase 35 demonstrated HTTP 200 from that route with no images in the app at all. ') +
+          'Set `images.unoptimized: true`, or restrict `images.remotePatterns`/`domains` to an explicit allow-list ' +
+          'and re-run this gate.',
       };
     },
   },

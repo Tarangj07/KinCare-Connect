@@ -31,7 +31,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { analyseNextConfig } from './lib/next-config-features.mjs';
+import { analyseNextConfig, readNextConfigValue } from './lib/next-config-features.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const realConfigPath = path.join(repoRoot, 'apps/web/next.config.mjs');
@@ -185,21 +185,42 @@ assertUnreadable('an export this analyser does not follow', `import cfg from './
 //    triage script derives from the same walk.
 // ---------------------------------------------------------------------------
 console.log('\n  the real apps/web/next.config.mjs');
+const realSource = readFileSync(realConfigPath, 'utf8');
 {
-  const a = analyseNextConfig(readFileSync(realConfigPath, 'utf8'), { fileName: 'apps/web/next.config.mjs' });
+  // Phase 36 (P35-1). This assertion used to be "declares NONE of the triaged
+  // features", which was true of the Phase 25 configuration. Phase 36 ADDS an
+  // `images` key — with `unoptimized: true` — so the assertion is restated
+  // rather than deleted, and restated more precisely than the original: a
+  // feature being PRESENT is not what matters, it is whether the presence
+  // ENABLES a reachable surface. The old form would have been satisfied by a
+  // config with no `images` key at all, which is exactly the configuration that
+  // left `/_next/image` live and unauthenticated on the Phase 35 evidence.
+  const a = analyseNextConfig(realSource, { fileName: 'apps/web/next.config.mjs' });
+  const surfaces = a.features.filter((f) => f !== 'image optimization');
   check(
-    'the project config is analysable and declares none of the triaged features',
-    a.analysable && a.features.length === 0,
-    `analysable=${a.analysable} features=[${a.features}] notes=${JSON.stringify(a.notes)}`,
+    'the project config is analysable and enables no request-routing surface',
+    a.analysable && surfaces.length === 0,
+    `analysable=${a.analysable} surfaces=[${surfaces}] notes=${JSON.stringify(a.notes)}`,
   );
   check(
     'the project config was resolved through its `export default nextConfig` identifier alias',
     a.form === 'identifier-alias',
     `form=${a.form}`,
   );
+
+  // The load-bearing Phase 36 assertion: the `images` key is present, and it is
+  // present in the DISABLING form. A presence test alone would pass for
+  // `images: {}`, which is the P35-1 configuration.
+  const unoptimized = readNextConfigValue(realSource, 'images', 'unoptimized', {
+    fileName: 'apps/web/next.config.mjs',
+  });
+  check(
+    'the `images` key is present AND disables the optimizer (`unoptimized: true`)',
+    a.features.includes('image optimization') && unoptimized.known === true && unoptimized.value === true,
+    `features=[${a.features}] unoptimized=${JSON.stringify(unoptimized.value)} known=${unoptimized.known} reason=${unoptimized.reason ?? 'n/a'}`,
+  );
 }
-assertNoFalsePositive('image optimization is not enabled by the real config', readFileSync(realConfigPath, 'utf8'), 'image optimization');
-assertNoFalsePositive('i18n is not enabled by the real config', readFileSync(realConfigPath, 'utf8'), 'Pages Router with i18n');
+assertNoFalsePositive('i18n is not enabled by the real config', realSource, 'Pages Router with i18n');
 assertDetected('image optimization IS detected when the key is present', `export default { images: { remotePatterns: [] } };`, 'image optimization');
 assertDetected('i18n IS detected when the key is present', `export default { i18n: { locales: ['en'] } };`, 'Pages Router with i18n');
 assertNoFalsePositive(
@@ -207,6 +228,27 @@ assertNoFalsePositive(
   `export default { /* images: none */ reactStrictMode: true };`,
   'image optimization',
 );
+
+// Phase 36: the value-level reads the triage rule and the new runtime gate both
+// depend on. A presence test cannot distinguish these, which is the whole
+// reason `readNextConfigValue` exists.
+console.log('\n  reading a config VALUE, not just a key (Phase 36)');
+{
+  const read = (src) => readNextConfigValue(src, 'images', 'unoptimized', { fileName: 'fixture.mjs' });
+  check('an absent `images` key reads as undefined and known', read(`export default { a: 1 };`).known === true && read(`export default { a: 1 };`).value === undefined);
+  check('`images: {}` reads as undefined and known', read(`export default { images: {} };`).known === true && read(`export default { images: {} };`).value === undefined);
+  check('`unoptimized: true` reads as true', read(`export default { images: { unoptimized: true } };`).value === true);
+  check('`unoptimized: false` reads as false', read(`export default { images: { unoptimized: false } };`).value === false);
+  check('`!true` reads as false', read(`export default { images: { unoptimized: !true } };`).value === false);
+  check('a dynamic value is UNREADABLE, not assumed safe', read(`export default { images: { unoptimized: someGlobal } };`).known === false);
+  check('an `images` spread is UNREADABLE, not assumed safe', read(`const b={}; export default { images: { ...b } };`).known === false);
+  check('a whole-config spread is UNREADABLE, not assumed safe', read(`const b={images:{unoptimized:true}}; export default { ...b };`).known === false);
+  check('a STRING mentioning `unoptimized: true` does not read as true', read(`export default { a: 'unoptimized: true' };`).value !== true);
+  check(
+    'a comment mentioning `unoptimized: true` does not read as true',
+    read(`export default {\n  // images: { unoptimized: true }\n};`).value !== true,
+  );
+}
 
 if (failures > 0) {
   console.error(`\nFAILED — ${failures} Next-config feature-detection assertion(s) did not hold.\n`);

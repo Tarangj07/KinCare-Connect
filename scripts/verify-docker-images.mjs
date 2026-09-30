@@ -61,6 +61,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHmac, randomUUID } from 'node:crypto';
+import { rmSync, writeFileSync } from 'node:fs';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
 const skipBuild = process.argv.includes('--skip-build');
@@ -1272,6 +1273,72 @@ async function main() {
     const res = await fetch(`http://127.0.0.1:${WEB_PORT}/p20-no-such-route`);
     assert(res.status === 404, `expected 404, got ${res.status}`);
     return '404';
+  });
+
+  // --- Phase 36 (P35-1): the image-optimizer endpoint in the REAL image -----
+  //
+  // `verify-next-image-optimizer.mjs` proves the endpoint is dead in the
+  // standalone server built from the source tree. This proves it in the artifact
+  // that is actually shipped. The two are not the same thing: the image copies
+  // `.next/standalone` and `.next/static` across stages, and a build that is
+  // correct locally can still produce an image whose traced tree differs.
+  //
+  // The Phase 35 review demonstrated this endpoint answering HTTP 200 with image
+  // bytes, unauthenticated, in the production container built from HEAD — so
+  // asserting it in the container is the only assertion that closes P35-1 rather
+  // than restating the source configuration.
+  await check('the image-optimization endpoint does not serve an image (Phase 36 P35-1)', async () => {
+    // Stage a REAL png in the running container's public/ directory first. A
+    // request for a missing file answers 400 from inside the optimizer ("isn't
+    // a valid image"), which looks like a refusal but is actually the optimizer
+    // RUNNING — the exact misreading Phase 35 recorded, where a 400 carrying
+    // the optimizer's own error string was cited as evidence the endpoint was
+    // absent. With a decodable image present, an enabled optimizer answers 200
+    // and a disabled one answers 404, so this probe distinguishes the two.
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAQAAAAECCAYAAACqaXHeAAAAKUlEQVR42mNk+M9QzzCKRsEoGgWjYBSMDIzEPIQwGDKgYh' +
+        'oEDEgwYhAKMDAxMDD8Z2AAAX8lCiuAAAAAElFTkSuQmCC',
+      'base64',
+    );
+    const tmp = '/tmp/p36-probe.png';
+    writeFileSync(tmp, png);
+    docker(['cp', tmp, `${webName}:/app/apps/web/public/p36-probe.png`]);
+    rmSync(tmp, { force: true });
+
+    const results = [];
+    for (const [label, target] of [
+      ['local png', '%2Fp36-probe.png'],
+      ['remote url', 'https%3A%2F%2Fexample.com%2Fx.png'],
+    ]) {
+      const res = await fetch(`http://127.0.0.1:${WEB_PORT}/_next/image?url=${target}&w=64&q=75`, {
+        headers: { accept: 'image/avif,image/webp,image/*,*/*;q=0.8' },
+      });
+      const contentType = res.headers.get('content-type') ?? '';
+      assert(
+        !(res.status === 200 && /^image\//.test(contentType)),
+        `/_next/image (${label}) answered ${res.status} ${contentType} — that is the P35-1 state: a live, ` +
+          'unauthenticated Image Optimization endpoint in the shipped image',
+      );
+      results.push(`${label}: ${res.status} ${contentType || '(no content-type)'}`);
+    }
+    return results.join('; ');
+  });
+
+  await check('the shipped image records the optimizer as disabled (Phase 36 P35-1)', async () => {
+    // `images-manifest.json` is a BUILD artifact and is deliberately NOT copied
+    // into the runtime image — the Dockerfile copies only `.next/standalone` and
+    // `.next/static`, so there is nothing to read here. That absence is itself
+    // worth asserting: it means the image cannot be shipped with a stale
+    // manifest claiming a different posture than the server it runs. The
+    // build-time half of this check lives in `verify-next-image-optimizer.mjs`,
+    // and the runtime half is the probe above.
+    const found = docker(['exec', webName, 'sh', '-c', 'find / -name images-manifest.json 2>/dev/null | head -1']);
+    assert(
+      found === '',
+      `the runtime image ships a build manifest at ${found}, which the Dockerfile should not copy; ` +
+        'a manifest in the image can disagree with the server that actually runs',
+    );
+    return 'no build manifest in the runtime image (only the traced server and static assets)';
   });
 
   // ------------------------------------------------------------- shutdown

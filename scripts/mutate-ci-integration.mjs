@@ -251,6 +251,61 @@ function makeMirror() {
   return root;
 }
 
+/**
+ * Phase 36 (P35-2). Make the mirror a real git work tree with every file
+ * COMMITTED, so the contract's untracked-target assertion has something to be
+ * right or wrong about.
+ *
+ * `untrackedTargetProblem()` in `verify-ci-parity.mjs` opens with
+ *
+ *     if (!existsSync(path.join(repoRoot, '.git'))) return null;
+ *
+ * and returns null — inventing no verdict — outside a work tree. Every mirror
+ * this harness built before Phase 36 was a `mkdtemp` directory with no `.git`,
+ * so that assertion was SKIPPED for all 21 mutants. The Phase 35 review
+ * identified exactly that gap: the untracked-file protection was implemented,
+ * read, and never once exercised by a test that could fail.
+ *
+ * `git init` + `git add -A` + `git -c user.* commit` makes every copied file
+ * tracked, which is the correct starting state. A mutant then removes ONE file
+ * from the index while leaving it on disk, producing precisely the Phase 31/32
+ * condition: local parity green, hosted CI red, because the runner checks out
+ * the index and the file is not in it.
+ */
+function gitInitMirror(root) {
+  const git = (...args) =>
+    spawnSync('git', ['-c', 'user.name=p36', '-c', 'user.email=p36@example.invalid', ...args], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 120_000,
+    });
+  // The store is a symlink into the real repository; without this it would be
+  // walked as 100k+ files and the commit would take minutes.
+  writeFileSync(
+    path.join(root, '.gitignore'),
+    ['node_modules', '.next', 'dist', ''].join('\n'),
+  );
+  let r = git('init', '-q');
+  if (r.status !== 0) throw new Error(`git init failed: ${r.stderr}`);
+  r = git('add', '-A');
+  if (r.status !== 0) throw new Error(`git add failed: ${r.stderr}`);
+  r = git('commit', '-q', '-m', 'mirror baseline');
+  if (r.status !== 0) throw new Error(`git commit failed: ${r.stderr}`);
+}
+
+/** Remove `relPath` from the index while leaving the file on disk. */
+function gitUntrack(root, relPath) {
+  const r = spawnSync('git', ['rm', '--cached', '-q', '--', relPath], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+  if (r.status !== 0) throw new Error(`git rm --cached failed for ${relPath}: ${r.stderr}`);
+  if (!existsSync(path.join(root, relPath))) {
+    throw new Error(`git rm --cached also removed ${relPath} from disk; the mutant needs it present-but-untracked`);
+  }
+}
+
 function readMirror(root, relPath) {
   return readFileSync(path.join(root, relPath), 'utf8');
 }
@@ -553,6 +608,90 @@ const MUTANTS = [
     },
   },
 
+  // --- 7. Phase 36 (P35-2): the UNTRACKED-ARTIFACT protection -------------
+  //
+  // P35-2, verbatim: "the untracked-artifact detection path has no passing
+  // mutant". `untrackedTargetProblem()` opens with
+  //
+  //     if (!existsSync(path.join(repoRoot, '.git'))) return null;
+  //
+  // and every mirror built before Phase 36 was a bare temp directory with no
+  // `.git`, so that branch was skipped for all 21 existing mutants. The check
+  // was implemented, read carefully, and never exercised by anything that could
+  // fail. This is the exact class of defect the Phase 32 root cause was: local
+  // green coexisting with hosted red because the file was in the working tree
+  // and absent from the commit the runner checks out.
+  //
+  // These three mutants form a 2x2 with the harness's own scoring:
+  //
+  //   C22  untracked + assertion live      -> must FAIL  (the check works)
+  //   C23  untracked + assertion disabled  -> must PASS  (C22's failure came
+  //                                           from that assertion and nothing
+  //                                           else)
+  //   C24  tracked   + assertion live      -> must PASS  (positive control: a
+  //                                           fully committed tree is fine)
+  //
+  // C22 alone would be a weaker result than it looks. The contract has several
+  // reasons to report a problem, so "exit 1" does not by itself prove the
+  // untracked assertion fired. C23 removes that ambiguity: with the assertion
+  // neutralised and the tree otherwise identical, the contract must go green.
+  // If C22 and C23 disagree, C22's detection was attributable to the untracked
+  // assertion specifically.
+  {
+    id: 'C22',
+    label: 'a gate script is present on disk but NOT tracked by git (P35-2)',
+    // The Phase 31/32 condition reproduced exactly. The file exists, so the
+    // EXISTENCE check is satisfied; only `git ls-files` can catch this.
+    expected: 'fail',
+    apply(root) {
+      gitInitMirror(root);
+      gitUntrack(root, path.join('scripts', 'verify-storage-backup-restore.mjs'));
+      return 'committed every mirror file, then removed scripts/verify-storage-backup-restore.mjs from the index ' +
+        '(the file stays on disk)';
+    },
+  },
+  {
+    id: 'C23',
+    label: 'CONTROL for C22: the untracked assertion itself is disabled',
+    // This is the mutant the Phase 35 review asked for: "removes/bypasses the
+    // untracked-target assertion while leaving the rest of the harness
+    // syntactically valid". It must NOT be detected — because the tree it
+    // leaves behind is the one C22 proved to be broken, and with the assertion
+    // gone the contract can no longer see it. A contract that still failed
+    // here would be failing for some OTHER reason, which would mean C22 proved
+    // nothing about the untracked path.
+    //
+    // The edit is a single early return inside the function body, so the file
+    // stays parseable (asserted by isParseableJs before scoring) and nothing
+    // else in the contract changes.
+    expected: 'pass',
+    apply(root) {
+      gitInitMirror(root);
+      gitUntrack(root, path.join('scripts', 'verify-storage-backup-restore.mjs'));
+      const src = readMirror(root, parityRel);
+      const anchor = 'function untrackedTargetProblem(step) {';
+      const at = src.indexOf(anchor);
+      if (at === -1) throw new Error(`anchor not found: ${anchor}`);
+      const insertAt = at + anchor.length;
+      const next = `${src.slice(0, insertAt)}\n  return null; // Phase 36 mutant C23: the assertion is bypassed${src.slice(insertAt)}`;
+      writeMirror(root, parityRel, next);
+      return 'made the gate script untracked AND inserted `return null` at the top of untrackedTargetProblem()';
+    },
+  },
+  {
+    id: 'C24',
+    label: 'POSITIVE CONTROL: every file is tracked (P35-2)',
+    // The over-correction guard for the pair above. A git work tree in which
+    // everything is committed is the normal state, and the contract must hold
+    // in it. Without this, a "fix" that made untrackedTargetProblem always
+    // report a problem would pass C22 and C23 while breaking every run.
+    expected: 'pass',
+    apply(root) {
+      gitInitMirror(root);
+      return 'made the mirror a git work tree with every file committed';
+    },
+  },
+
   // --- 6. the contract itself is truncated -------------------------------
   {
     id: 'C19',
@@ -593,6 +732,9 @@ MUTANTS.contractIds = [
   'p23-w2-auth-suite', 'p23-w9-migrations', 'p23-w10-artifact', 'p23-w1-metadata-mutate',
   'p23-w3-routes-mutate', 'p23-w5-config-mutate', 'p24-d2-lifetime-mutate',
   'p28-n12-mutate', 'p28-storage-backup', 'p28-db-suites', 'p29-ci-parity', 'p29-ci-integration-mutate',
+  // Phase 36 (P35-1, P34-1).
+  'p36-image-optimizer', 'p36-image-optimizer-mutate',
+  'p36-dependency-floor', 'p36-dependency-floor-mutate',
 ];
 
 // ---------------------------------------------------------------------------
@@ -687,12 +829,23 @@ for (const m of MUTANTS) {
     (r) => readFileSync(path.join(root, r), 'utf8') !== preRun[MIRROR_SOURCE[r]],
   );
   const renamed = !existsSync(path.join(root, 'scripts', 'verify-storage-backup-restore.mjs'));
-  if (changed.length === 0 && !renamed) {
+  // Phase 36 (P35-2). A mutant that only changes the GIT INDEX — committing the
+  // mirror, or removing a file from the index while leaving it on disk — changes
+  // no file content, so the content comparison above cannot see it and would
+  // score such a mutant as a no-op. That verdict would be wrong twice: the
+  // mutant did apply, and rejecting it would delete the only coverage the
+  // untracked-artifact protection has. Git state is therefore its own change
+  // signal, and a mirror that became a work tree counts as changed.
+  const becameWorkTree = existsSync(path.join(root, '.git'));
+  if (changed.length === 0 && !renamed && !becameWorkTree) {
     log('      FAIL  the mutant did not change the mirror. Its result would be meaningless.');
     failures += 1;
     continue;
   }
-  log(`        applied: ${description} [${changed.length} file(s) changed${renamed ? ' + 1 rename' : ''}]`);
+  log(
+    `        applied: ${description} [${changed.length} file(s) changed` +
+      `${renamed ? ' + 1 rename' : ''}${becameWorkTree ? ' + git index' : ''}]`,
+  );
 
   // A mutant that leaves the gate's own source unparseable has not tested
   // anything: `node` exits 1 on a SyntaxError, which is indistinguishable

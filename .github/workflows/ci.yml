@@ -122,6 +122,25 @@ jobs:
       - name: Web config — Next features are detected from the AST (Phase 25 F-4)
         run: node scripts/verify-next-config-features.mjs
 
+      # --- Phase 36 (P34-1): the dependency security floor ----------------
+      #
+      # Every gate above filters `pnpm audit` to critical and high before it
+      # decides anything (`triage-vulnerabilities.mjs:748`). Phase 33 remediated
+      # nine advisories across three packages by overriding `brace-expansion`
+      # and `undici`, and chose 1.1.21 / 2.1.7 rather than the high-severity
+      # floors 1.1.19 / 2.1.5 because a MODERATE advisory sets the real floor.
+      #
+      # The Phase 35 independent review then showed that choice was protected by
+      # nothing: with the overrides lowered to 1.1.20 / 2.1.6 every gate here
+      # exited 0 while advisories 1240100 and 1240101 were back in the graph.
+      # This step reads the RESOLVED GRAPH in pnpm-lock.yaml — not the override
+      # declaration — and fails if any instance sits below a recorded floor.
+      #
+      # It suppresses nothing: no audit ignore, no allow-list, no severity
+      # change, no continue-on-error. It adds a check.
+      - name: Supply chain — the dependency security floor is enforced (Phase 36 P34-1)
+        run: node scripts/verify-dependency-security-floor.mjs
+
       - name: API unit tests
         run: pnpm --filter @ecc/api test
 
@@ -328,6 +347,25 @@ jobs:
       - name: Web build
         run: pnpm --filter @ecc/web build
 
+      # --- Phase 36 (P35-1): the image-optimizer endpoint must be unreachable
+      #
+      # It must run HERE, after `Web build` and not before it: the gate reads the
+      # BUILT `.next/images-manifest.json` and starts the standalone server from
+      # the built tree, so with no web build it would fail for the wrong reason
+      # — or, worse, be placed in the `api` job (which builds the API, not the
+      # web) where it could never see the evidence it exists to check.
+      #
+      # Why it exists. Advisory 1193733 is a critical unauthenticated RCE in the
+      # Next.js Image Optimization API when AVIF output is used. The triage rule
+      # reported it NOT REACHABLE because the app renders no images — but Next
+      # registers `/_next/image` regardless. The Phase 35 independent review
+      # demonstrated it live in the production container: HTTP 200 with image
+      # bytes, unauthenticated, in an app with no `<Image>` anywhere. The gate
+      # now asserts the configuration, the built manifest and the RUNNING
+      # server, and fails closed if any of the three cannot be read.
+      - name: Web runtime — the Image Optimization endpoint is unreachable (Phase 36 P35-1)
+        run: node scripts/verify-next-image-optimizer.mjs
+
   # --- Phase 23: release-assurance gates ---------------------------------
   #
   # These are the checks that need a real PostgreSQL or a long build, so they
@@ -485,6 +523,31 @@ jobs:
       # and a claim of that kind is worth the compute once per release.
       - name: Mutation — the rewrites triage rule sees the form Next.js supports (Phase 25 F-4)
         run: node scripts/mutate-next-config-rewrites.mjs
+
+      # --- Phase 36: the two new controls are themselves mutation-tested -----
+      #
+      # A gate that has never been shown to fail might not fail, and the Phase 35
+      # review found exactly that in `verify-ci-parity.mjs`: the untracked-artifact
+      # assertion was implemented, read, and exercised by nothing that could.
+      #
+      # Both harnesses mutate throwaway MIRRORS and assert the real files are
+      # byte-identical afterwards. The image-optimizer harness needs the built web
+      # tree and reports SKIPPED (exit 2) without it, which fails this job rather
+      # than being recorded as a pass.
+      #
+      # The build is its OWN step, not a line above the harness in one `run:`
+      # block. The CI contract matches a required gate on its whole normalised
+      # command, so a two-line block collapses to `pnpm … build node …` and the
+      # harness no longer matches its declared `exactCommand` — the contract
+      # caught exactly this when it was written that way the first time.
+      - name: Web build (for the image-optimizer mutation harness)
+        run: pnpm --filter @ecc/web build
+
+      - name: Mutation — the image-optimizer gate detects the P35-1 state (Phase 36)
+        run: node scripts/mutate-next-image-optimizer.mjs
+
+      - name: Mutation — the dependency floor detects a lowered remediation (Phase 36)
+        run: node scripts/mutate-dependency-security-floor.mjs
 
       # --- Phase 29: the Phase 28 DB-suite driver ---------------------------
       #

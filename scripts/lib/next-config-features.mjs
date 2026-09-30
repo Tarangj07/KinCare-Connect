@@ -32,13 +32,27 @@
  *   2. Does the export have a shape this analyser understands at all?
  *   3. Is there something in the config whose contents this analyser cannot
  *      read (a `plugins` array, a computed/spread config)?
+ *   4. For keys whose security effect depends on their VALUE rather than on
+ *      their presence, what is that value? (`readNextConfigValue`)
+ *
+ * (4) exists because of Phase 36 (P35-1). The `images` key is exactly this
+ * shape: `images: {}` and `images: { unoptimized: true }` both declare the key,
+ * and before this change both were reported as "image optimization" — the same
+ * verdict. They are not the same posture. `next/dist/server/next-server.js`
+ * enters the optimizer only when `images.loader` is `default` AND
+ * `images.unoptimized` is falsy; with `unoptimized: true` it renders a 404 and
+ * never loads the optimizer module. A presence test cannot tell those apart, so
+ * the triage rule had to guess, and it guessed "the app does not use images,
+ * therefore the optimizer is absent" — which is false, because Next registers
+ * `/_next/image` regardless of whether any component uses it.
  *
  * When (2) or (3) is negative the caller MUST fail closed. "I could not check
  * this" is a finding, not a dismissal — the same rule the triage script
  * already applies to an advisory it has no rule for.
  *
- * Usage:  import { analyseNextConfig } from './lib/next-config-features.mjs';
+ * Usage:  import { analyseNextConfig, readNextConfigValue } from './lib/next-config-features.mjs';
  *         analyseNextConfig(source, { fileName: 'next.config.mjs' })
+ *         readNextConfigValue(source, 'images', 'unoptimized', { fileName: 'next.config.mjs' })
  */
 import { createRequire } from 'node:module';
 
@@ -185,6 +199,158 @@ export function analyseNextConfig(source, { fileName = 'next.config.mjs' } = {})
 
   result.features = [...features];
   return result;
+}
+
+/**
+ * Phase 36 (P35-1) — read the VALUE of a nested key in the exported config.
+ *
+ * `readNextConfigValue(source, 'images', 'unoptimized')` answers "what does
+ * `config.images.unoptimized` evaluate to, textually?" for the literal forms a
+ * Next config is written in.
+ *
+ * Why a presence test is not enough here. Next enters the image optimizer only
+ * when `images.loader === 'default'` and `images.unoptimized` is falsy; with
+ * `unoptimized: true` it 404s the route and never requires the optimizer module
+ * at all. The triage rule for the AVIF RCE has to know which side of that line
+ * the app is on, and `analyseNextConfig` cannot tell it: both `images: {}` and
+ * `images: { unoptimized: true }` declare the `images` key.
+ *
+ * Deliberately conservative, in the direction of the caller failing closed:
+ *
+ *   - Returns `{ known: false }` for anything it cannot read with certainty —
+ *     a spread, a computed key, a reference to something declared elsewhere, a
+ *     value built by a call. It NEVER guesses. The triage rule treats
+ *     `known: false` as "cannot prove the optimizer is disabled", which reports
+ *     REACHABLE. An unreadable config must not be read as a safe one.
+ *   - Reads only literals (`true`, `false`, `null`, numbers, strings) and the
+ *     unary `!` of a literal. `unoptimized: !!process.env.X` is NOT resolved to
+ *     a boolean — it is reported as `known: false`.
+ *   - A key that is simply ABSENT is `known: true, value: undefined`, which is
+ *     distinct from `known: false`. Absent means "not declared", i.e. Next's
+ *     default applies; unreadable means "cannot tell". The caller must not
+ *     conflate them.
+ *
+ * @returns {{known: boolean, value: boolean|string|number|null|undefined, at: string|null, reason: string|null}}
+ */
+export function readNextConfigValue(source, topKey, nestedKey, { fileName = 'next.config.mjs' } = {}) {
+  const unknown = (reason) => ({ known: false, value: undefined, at: null, reason });
+  if (typeof source !== 'string' || source.trim() === '') return unknown('the config file is empty or unreadable');
+
+  const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, /* setParentNodes */ true, ts.ScriptKind.JS);
+  let exported;
+  for (const stmt of sf.statements) {
+    if (ts.isExportAssignment(stmt) && !stmt.isExportEquals) exported = stmt.expression;
+    if (
+      ts.isFunctionDeclaration(stmt) &&
+      stmt.name === undefined === false &&
+      (ts.getCombinedModifierFlags(stmt) & ts.ModifierFlags.Default) !== 0
+    ) {
+      exported = stmt;
+    }
+  }
+  if (!exported) {
+    for (const stmt of sf.statements) {
+      if (
+        ts.isExpressionStatement(stmt) &&
+        ts.isBinaryExpression(stmt.expression) &&
+        stmt.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isPropertyAccessExpression(stmt.expression.left) &&
+        ts.isIdentifier(stmt.expression.left.expression) &&
+        stmt.expression.left.expression.text === 'module' &&
+        ts.isPropertyAccessExpression(stmt.expression.left) &&
+        stmt.expression.left.name.text === 'exports'
+      ) {
+        exported = stmt.expression.right;
+      }
+    }
+  }
+  if (!exported) return unknown('no default export and no `module.exports` assignment was found in the config file');
+
+  const { objects, unresolved } = resolveConfigObjects(sf, exported);
+  if (objects.length === 0) {
+    return unknown(`the default export does not resolve to a config object literal: ${describeNode(exported)}`);
+  }
+
+  // More than one resolved object means a conditional/merged config; a single
+  // literal value cannot describe it.
+  if (objects.length > 1) {
+    return unknown(
+      `the config resolves to ${objects.length} object literals (${unresolved.join('; ') || 'a conditional or merged export'}), so no single value can be asserted`,
+    );
+  }
+
+  const obj = objects[0];
+  let top = null;
+  for (const prop of obj.properties) {
+    if (ts.isSpreadAssignment(prop)) return unknown(`the config object spreads \`${describeNode(prop.expression)}\``);
+    if (prop.name === undefined) continue;
+    if (ts.isComputedPropertyName(prop.name)) return unknown(`the config object has a computed key \`${prop.name.getText(sf)}\``);
+    const name = ts.isIdentifier(prop.name) ? prop.name.text : prop.name.getText(sf);
+    if (name !== topKey) continue;
+    if (top !== null) return unknown(`the config declares \`${topKey}\` more than once, so no single value can be asserted`);
+    top = prop;
+  }
+
+  if (top === null) {
+    // Declared nowhere: Next's default applies. Known, and explicitly NOT the
+    // same as "unreadable".
+    return { known: true, value: undefined, at: null, reason: null };
+  }
+  if (ts.isMethodDeclaration(top)) return unknown(`\`${topKey}\` is declared as a method, not a value`);
+
+  let inner = top.initializer;
+  if (!inner) return unknown(`\`${topKey}\` has no readable initializer`);
+  if (ts.isIdentifier(inner)) {
+    const decl = findVariableInitializer(sf, inner.text);
+    if (!decl) return unknown(`\`${topKey}\` is \`${inner.text}\`, which is not a variable declared in this file`);
+    inner = decl;
+  }
+  if (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+  if (!ts.isObjectLiteralExpression(inner)) {
+    return unknown(`\`${topKey}\` is \`${describeNode(inner)}\`, which is not an object literal`);
+  }
+
+  for (const prop of inner.properties) {
+    if (ts.isSpreadAssignment(prop)) {
+      return unknown(`\`${topKey}\` spreads \`${describeNode(prop.expression)}\`, so its keys cannot be enumerated`);
+    }
+    if (prop.name === undefined) continue;
+    if (ts.isComputedPropertyName(prop.name)) {
+      return unknown(`\`${topKey}\` has a computed key \`${prop.name.getText(sf)}\``);
+    }
+    const name = ts.isIdentifier(prop.name) ? prop.name.text : prop.name.getText(sf);
+    if (name !== nestedKey) continue;
+    if (ts.isMethodDeclaration(prop)) return unknown(`\`${topKey}.${nestedKey}\` is declared as a method, not a value`);
+    const literal = readLiteral(prop.initializer);
+    if (literal.known !== true) {
+      return unknown(`\`${topKey}.${nestedKey}\` is \`${describeNode(prop.initializer)}\`, which is not a literal`);
+    }
+    const at = sf.getLineAndCharacterOfPosition(prop.getStart(sf));
+    return { known: true, value: literal.value, at: `${fileName}:${at.line + 1}:${at.character + 1}`, reason: null };
+  }
+
+  // The key exists and is readable, but does not declare the nested key.
+  return { known: true, value: undefined, at: null, reason: null };
+}
+
+/**
+ * A literal, or the unary `!` of a literal. Anything else is `known: false`.
+ * `!!process.env.FOO` deliberately does NOT resolve — a runtime value is not a
+ * literal, and a security rule must not be handed a guess.
+ */
+function readLiteral(node) {
+  if (!node) return { known: false, value: undefined };
+  if (ts.isParenthesizedExpression(node)) return readLiteral(node.expression);
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return { known: true, value: true };
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return { known: true, value: false };
+  if (node.kind === ts.SyntaxKind.NullKeyword) return { known: true, value: null };
+  if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
+    const inner = readLiteral(node.operand);
+    return inner.known === true ? { known: true, value: !inner.value } : inner;
+  }
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return { known: true, value: node.text };
+  if (ts.isNumericLiteral(node)) return { known: true, value: Number(node.text) };
+  return { known: false, value: undefined };
 }
 
 /**

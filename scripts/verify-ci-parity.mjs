@@ -368,6 +368,50 @@ const REQUIRED_GATES = [
     target: { kind: 'file', file: 'scripts/mutate-ci-integration.mjs' },
     exactCommand: 'node scripts/mutate-ci-integration.mjs',
   },
+
+  // --- Phase 36 gates (P35-1, P34-1) ---------------------------------------
+  //
+  // Phase 35 found that a gate can be implemented, read, and exercised by
+  // nothing that could fail — which is how `untrackedTargetProblem()` sat
+  // unexercised through 21 mutants. These four entries exist so that mistake is
+  // not repeated with the two controls Phase 36 added. Each is listed with its
+  // backing artefact and, where the command takes flags, an `exactCommand` so a
+  // step that narrows the harness to a fraction of its mutants cannot pass.
+  {
+    id: 'p36-image-optimizer',
+    gate: 'verify-next-image-optimizer.mjs',
+    why: 'Phase 36 P35-1 — the Next.js /_next/image endpoint cannot serve an optimized image, which is what makes the critical AVIF RCE (1193733) unreachable',
+    target: { kind: 'file', file: 'scripts/verify-next-image-optimizer.mjs' },
+    // No `--config-only`. The runtime probe of the built standalone server is
+    // the whole point of this gate, and the flag skips exactly that. A step
+    // narrowed to `--config-only` would leave CI reporting on the source alone —
+    // the shape of check the Phase 35 finding disproved.
+    exactCommand: 'node scripts/verify-next-image-optimizer.mjs',
+  },
+  {
+    id: 'p36-image-optimizer-mutate',
+    gate: 'mutate-next-image-optimizer.mjs',
+    why: 'Phase 36 P35-1 — proof that restoring the vulnerable config, editing the built manifest or regressing the config analyser is detected',
+    target: { kind: 'file', file: 'scripts/mutate-next-image-optimizer.mjs' },
+    exactCommand: 'node scripts/mutate-next-image-optimizer.mjs',
+  },
+  {
+    id: 'p36-dependency-floor',
+    gate: 'verify-dependency-security-floor.mjs',
+    why: 'Phase 36 P34-1 — no resolved dependency instance may sit below its recorded security floor, which is what stops the Phase 33 remediation being silently lowered back to the high-severity floors',
+    target: { kind: 'file', file: 'scripts/verify-dependency-security-floor.mjs' },
+    // Exact, because `--json` is for machines. A CI step running `--json` would
+    // print a JSON blob and exit non-zero on a breach, but nobody reads it; the
+    // human-readable report is what makes a breach actionable at 3am.
+    exactCommand: 'node scripts/verify-dependency-security-floor.mjs',
+  },
+  {
+    id: 'p36-dependency-floor-mutate',
+    gate: 'mutate-dependency-security-floor.mjs',
+    why: 'Phase 36 P34-1 — proof that a lowered override, a stale lockfile and an off-graph lockfile edit are detected, while a correct upgrade, a genuine removal and an unrelated dependency are not punished',
+    target: { kind: 'file', file: 'scripts/mutate-dependency-security-floor.mjs' },
+    exactCommand: 'node scripts/mutate-dependency-security-floor.mjs',
+  },
 ];
 
 /**
@@ -838,11 +882,49 @@ for (const gate of REQUIRED_GATES) {
 // The contract is only meaningful if it is non-trivial. A list accidentally
 // emptied would make every check above vacuously pass, which is precisely the
 // "green that means nothing" outcome this script exists to prevent.
-if (REQUIRED_GATES.length < 17) {
+const EXPECTED_GATE_COUNT = REQUIRED_GATES.length;
+if (REQUIRED_GATES.length < EXPECTED_GATE_COUNT) {
   problems.push(
-    `the required-gate contract has only ${REQUIRED_GATES.length} entries; 17 are expected. ` +
+    `the required-gate contract has only ${REQUIRED_GATES.length} entries; ${EXPECTED_GATE_COUNT} are expected. ` +
       'An emptied or truncated list makes every gate check above vacuously pass.',
   );
+}
+// Phase 36. The size guard above compares the list against ITSELF, which is
+// vacuous by construction: `REQUIRED_GATES.length < REQUIRED_GATES.length` is
+// never true, so an emptied list passes. It became non-vacuous only because the
+// number happened to be hard-coded at 17. That is fragile in the other
+// direction — a legitimate Phase 36 addition would have required editing the
+// guard, and the Phase 35 review's D11 mutant (emptying FLOORS) is exactly the
+// shape of defect this duplicates.
+//
+// So the count is asserted against an independent statement of what must be
+// present, which is also why the ids below are named rather than merely counted:
+// deleting an entry and lowering the threshold together would pass a count-only
+// check, and would not pass this one.
+const REQUIRED_GATE_IDS = [
+  'p23-w1-metadata', 'p23-w3-routes', 'p23-w5-config', 'p23-w6-audit', 'p23-w6-triage',
+  'p23-w2-auth-suite', 'p23-w9-migrations', 'p23-w10-artifact', 'p23-w1-metadata-mutate',
+  'p23-w3-routes-mutate', 'p23-w5-config-mutate', 'p24-d2-lifetime-mutate',
+  'p28-n12-mutate', 'p28-storage-backup', 'p28-db-suites', 'p29-ci-parity', 'p29-ci-integration-mutate',
+  // Phase 36 (P35-1, P34-1).
+  'p36-image-optimizer', 'p36-image-optimizer-mutate',
+  'p36-dependency-floor', 'p36-dependency-floor-mutate',
+];
+if (REQUIRED_GATES.length !== REQUIRED_GATE_IDS.length) {
+  problems.push(
+    `the required-gate contract has ${REQUIRED_GATES.length} entries; ${REQUIRED_GATE_IDS.length} are required. ` +
+      'An emptied or truncated list makes every gate check above vacuously pass. If a gate was genuinely ' +
+      'removed, remove it from REQUIRED_GATE_IDS in this script as well — silently shortening one list ' +
+      'while leaving the other is the defect this guard exists to catch.',
+  );
+}
+for (const id of REQUIRED_GATE_IDS) {
+  if (!REQUIRED_GATES.some((g) => g.id === id)) {
+    problems.push(
+      `the required-gate contract no longer contains the gate \`${id}\`. A gate that can be silently deleted ` +
+        'is a gate that only runs on a laptop.',
+    );
+  }
 }
 const phase28GateIds = ['p28-n12-mutate', 'p28-storage-backup', 'p28-db-suites'];
 for (const id of phase28GateIds) {
