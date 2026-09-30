@@ -36,6 +36,16 @@
  *          mutation-tested at source level by `verify:lifetime:mutate`; this
  *          mutant proves the IMAGE, which is the only place the two can
  *          differ from `dist`.
+ *   M8  the rate-limit refusal reverted to 403 (Phase 28 N-12)
+ *       -> the rate-limit check must fail.
+ *   M9  the rate-limit refusal bypassed entirely
+ *       -> the rate-limit check must fail. Distinct from M4 (disarmed) and
+ *          M8 (wrong status): this is the limiter running but not refusing.
+ *   M10 the `Retry-After` contract dropped from a 429
+ *       -> the rate-limit check must fail. M8 and M10 both leave 429 in
+ *          place, so neither alone can show the header is load-bearing.
+ *   M11 authorization refusals widened to 429 (N-12 over-correction)
+ *       -> the authorization check must fail. The converse of M8..M10.
  *
  * Phase 24 (D-9): free space is reported after every mutant and a low-space
  * warning names the mitigation. `--prune-cache` enables reclaiming the build cache
@@ -177,6 +187,64 @@ const MUTANTS = {
         'src/auth/guards/auth.guard.ts',
         "        algorithms: ['HS256'],\n        maxAge: ACCESS_TOKEN_TTL_SECONDS,\n",
         "        algorithms: ['HS256'],\n",
+      ],
+    ],
+  },
+  // Phase 28 (N-12). M4 proves the limiter is ARMED in the image. These
+  // three prove the three separate properties the N-12 fix introduced, each
+  // of which can regress on its own while the limiter keeps working:
+  //   M8  the refusal reverts to 403
+  //   M9  the limiter stops refusing at all (refusal path bypassed)
+  //   M10 the Retry-After contract is dropped
+  M8: {
+    label: 'the rate-limit refusal reverts from 429 to 403 (N-12)',
+    expected: /the rate limiter is enforced in the image/,
+    edits: [
+      [
+        'src/common/exceptions/rate-limit-exceeded.exception.ts',
+        "super('Rate limit exceeded. Try again later.', HttpStatus.TOO_MANY_REQUESTS);",
+        "super('Rate limit exceeded. Try again later.', HttpStatus.FORBIDDEN);",
+      ],
+    ],
+  },
+  M9: {
+    label: 'the rate-limit refusal is bypassed entirely (N-12)',
+    expected: /the rate limiter is enforced in the image/,
+    edits: [
+      [
+        'src/auth/guards/rate-limit.guard.ts',
+        '      throw new RateLimitExceededException(this.retryAfterSecondsFor(record, now));',
+        '      return true;',
+      ],
+    ],
+  },
+  M10: {
+    label: 'the Retry-After contract is dropped from a 429 (N-12)',
+    expected: /the rate limiter is enforced in the image/,
+    edits: [
+      [
+        'src/common/filters/global-exception.filter.ts',
+        "      res.setHeader('Retry-After', String(exception.retryAfterSeconds));",
+        "      void exception;",
+      ],
+    ],
+  },
+  // The converse of M8..M10, and the mutant that a "fix N-12 by widening
+  // everything" patch would produce. Without it, a build in which every 4xx
+  // became 429 would satisfy M8's check while silently breaking the entire
+  // authorization surface.
+  //
+  // The edit is in the global filter, not in a controller: it is the only
+  // place a status is decided for every exception at once, so it is also the
+  // only place a plausible over-correction could be introduced.
+  M11: {
+    label: 'authorization refusals were widened to 429 as well (N-12 over-correction)',
+    expected: /authorization refusals in the image are 403, not 429/,
+    edits: [
+      [
+        'src/common/filters/global-exception.filter.ts',
+        '      status = exception.getStatus();',
+        '      status = exception.getStatus() === 403 ? 429 : exception.getStatus();',
       ],
     ],
   },

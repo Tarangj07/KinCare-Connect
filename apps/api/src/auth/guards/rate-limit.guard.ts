@@ -1,5 +1,7 @@
 import type { CanActivate, ExecutionContext} from '@nestjs/common';
-import { ForbiddenException,Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+
+import { RateLimitExceededException } from '../../common/exceptions/rate-limit-exceeded.exception';
 
 /**
  * Placeholder in-process rate limiter (Phase 3; known limitations are
@@ -45,12 +47,50 @@ import { ForbiddenException,Injectable } from '@nestjs/common';
  *
  * Rate limiting is never removed from production, and no environment
  * setting short of the deliberate test-runner combination can disable it.
+ *
+ * Phase 28 (N-12) — HTTP semantics.
+ *
+ * An exhausted budget was reported as `403 Forbidden` because the guard
+ * threw `ForbiddenException`. It now throws `RateLimitExceededException`,
+ * which is HTTP 429 with a truthful `Retry-After`. Nothing about the
+ * control itself changed: same 10-attempt budget, same 15-minute sliding
+ * window, same per-IP key, same refusal on the same condition, same
+ * production-proof bypass. Only the status a client observes is correct
+ * now. The reasoning is in
+ * `common/exceptions/rate-limit-exceeded.exception.ts`.
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
   private readonly store = new Map<string, { attempts: number; lastAttempt: number }>();
   private readonly maxAttempts = 10;
   private readonly windowMs = 15 * 60 * 1000;
+
+  /**
+   * Phase 28 (N-12) — how long this caller must actually wait.
+   *
+   * The window slides on `lastAttempt`, which is only advanced on an
+   * ALLOWED request: the refusal path throws before reaching that update,
+   * so `lastAttempt` still holds the timestamp of the last attempt that
+   * counted. The budget frees up when `now - lastAttempt > windowMs`
+   * becomes true, i.e. at `lastAttempt + windowMs`.
+   *
+   * So the honest remaining time is `lastAttempt + windowMs - now`, derived
+   * from the real record rather than asserted as a constant. Two details
+   * matter:
+   *
+   *  - The comparison in `canActivate` is strict (`>`), so at exactly
+   *    `lastAttempt + windowMs` the record has NOT yet reset and the
+   *    request is still refused. Rounding a zero remainder down to
+   *    `Retry-After: 0` would therefore be a lie that costs the caller a
+   *    second failed attempt. The floor is 1.
+   *  - Rounding is UP to the next whole second, because `Retry-After` is
+   *    defined in seconds and rounding down would again invite an attempt
+   *    that is still refused.
+   */
+  private retryAfterSecondsFor(record: { lastAttempt: number }, now: number): number {
+    const remainingMs = record.lastAttempt + this.windowMs - now;
+    return Math.max(1, Math.ceil(remainingMs / 1000));
+  }
 
   /**
    * Explicitly test-scoped: requires an unambiguous test environment AND
@@ -73,7 +113,11 @@ export class RateLimitGuard implements CanActivate {
       return true;
     }
     if (record.attempts >= this.maxAttempts) {
-      throw new ForbiddenException('Rate limit exceeded. Try again later.');
+      // Phase 28 (N-12): 429, not 403. Throttling is not an authorization
+      // decision and must not be reported as one. The budget, the window
+      // and the refusal itself are unchanged from Phase 3 — only the status
+      // and the `Retry-After` contract are new.
+      throw new RateLimitExceededException(this.retryAfterSecondsFor(record, now));
     }
     record.attempts += 1;
     record.lastAttempt = now;

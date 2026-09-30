@@ -365,6 +365,28 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # --- Phase 32: the CI contract is checked FIRST ------------------------
+      #
+      # Ordering, and it is the whole point of the change. This step used to sit
+      # near the end of this job, AFTER the gates it validates. Hosted run
+      # 36618193752 showed what that costs: the storage-backup step failed
+      # first, so the job died on the symptom, the contract step was never
+      # reached, and the run reported a bare
+      # `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT` instead of the actual finding — that
+      # the referenced script and file were not in the committed tree.
+      #
+      # The contract could already detect that. It simply never got to run. It
+      # now runs immediately after the install, before anything it governs, so a
+      # broken contract is reported as a broken contract. It must stay after
+      # `pnpm install` because it parses the workflow and resolves package
+      # scripts, and it tolerates the absence of `dist/` because the Phase 32
+      # resolvability check recognises job-generated build output.
+      #
+      # It is executed, not merely listed, and it is not advisory.
+      - name: CI contract — the workflow satisfies the parity contract (Phase 32 ordering)
+        run: node scripts/verify-ci-parity.mjs --list
+
       - name: Generate Prisma client
         run: pnpm --filter @ecc/api exec prisma generate
 
@@ -482,23 +504,6 @@ jobs:
       # the developer `ecc` database is not reachable even by a bug.
       - name: Database-backed suites — e2e and unit+integration on a fresh throwaway PostgreSQL (Phase 28)
         run: node scripts/run-db-suites.mjs
-
-      # --- Phase 29: the CI contract protects itself ------------------------
-      #
-      # `--list` is the structural half of the parity script: it enforces
-      # REQUIRED_GATES, the advisory/`|| true` rules, Node-version agreement
-      # and the containers-job check, and it executes NOTHING. The default
-      # (executing) mode is deliberately not used here — it re-runs almost
-      # every step in this workflow, which would double the job's cost for no
-      # additional coverage.
-      #
-      # This step is the reason a Phase 28 gate cannot silently fall out of CI
-      # again. The Phase 28 review found three gates that existed, were
-      # green locally, and were wired into neither this file nor the parity
-      # contract; without this step even the fix for that would have been
-      # unenforced.
-      - name: CI contract — the workflow satisfies the parity contract (Phase 29)
-        run: node scripts/verify-ci-parity.mjs --list
 
       # --- Phase 29: the CI integration is itself mutation-tested ----------
       #

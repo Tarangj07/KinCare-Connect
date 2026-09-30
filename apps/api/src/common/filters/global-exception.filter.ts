@@ -2,6 +2,8 @@ import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
 import { Catch, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
+import { RateLimitExceededException } from '../exceptions/rate-limit-exceeded.exception';
+
 import { classifyClientInputError } from './client-input-errors';
 
 /**
@@ -50,6 +52,17 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let code = 'INTERNAL_ERROR';
     let message = 'An unexpected error occurred.';
+
+    // Phase 28 (N-12). The rate limiter throws this, so this is the only
+    // place `Retry-After` is set. RFC 6585 §3 makes the header optional but
+    // is what makes 429 actionable: without it a client has to guess when to
+    // come back, which is exactly what caused a 403-era throttled user to
+    // give up. The value is computed by the guard from the real window, not
+    // asserted here, and is written only for this one exception type — no
+    // other status ever gains a `Retry-After`.
+    if (exception instanceof RateLimitExceededException) {
+      res.setHeader('Retry-After', String(exception.retryAfterSeconds));
+    }
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();

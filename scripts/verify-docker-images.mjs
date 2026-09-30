@@ -60,7 +60,7 @@
  * Exits non-zero on the first failing assertion.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
 const skipBuild = process.argv.includes('--skip-build');
@@ -834,7 +834,10 @@ async function main() {
     } catch {
       /* asserted on below */
     }
-    return { status: res.status, json, text };
+    // `headers` is returned so the Phase 28 rate-limit check can assert on
+    // `Retry-After` without issuing a second request — issuing one would
+    // spend a unit of the very budget that check is measuring.
+    return { status: res.status, json, text, headers: res.headers };
   }
 
   await check('a body well above body-parser default is parsed, not refused', async () => {
@@ -1006,14 +1009,44 @@ async function main() {
     // with NODE_ENV=production, so this proves the limiter is genuinely armed
     // in the artifact a deployment runs — which the source-level suites
     // cannot, because they run with the bypass deliberately enabled.
+    //
+    // Phase 28 (N-12): the refusal is 429. This check asserts the status
+    // specifically, because a gate that merely looked for "some refusal"
+    // would still be green against the 403 defect it exists to prevent. It
+    // also asserts `RATE_LIMITED` in the envelope, which the global filter
+    // derives from the status, and `Retry-After`, so the 429 cannot be
+    // faked by an unrelated component emitting the number.
     const email = `p23-rl-${Date.now()}@container-gate.invalid`;
     let limited = false;
     // 14 attempts: the production budget is 10 per IP per 15 minutes.
     for (let i = 0; i < 14; i += 1) {
-      const { status, json } = await postRaw('/auth/login', JSON.stringify({ email, password: `Wrong${i}pass1` }));
-      if (status === 403 && /rate limit/i.test(json?.error?.message ?? '')) {
+      const { status, json, headers } = await postRaw('/auth/login', JSON.stringify({ email, password: `Wrong${i}pass1` }));
+      if (status === 429 && /rate limit/i.test(json?.error?.message ?? '')) {
+        // The refusal must be identifiable as throttling, not as an
+        // authorization failure, and must tell the caller when to return.
+        if (json?.error?.code !== 'RATE_LIMITED') {
+          throw new Error(
+            `a rate-limited request answered 429 but error.code was ${JSON.stringify(json?.error?.code)}; ` +
+              'the global filter did not classify it as RATE_LIMITED',
+          );
+        }
+        const retryAfter = headers?.get?.('retry-after');
+        if (!/^\d+$/.test(String(retryAfter)) || Number.parseInt(String(retryAfter), 10) <= 0) {
+          throw new Error(
+            `a 429 in the image carried Retry-After=${JSON.stringify(retryAfter)}; it must be a positive ` +
+              'integer number of seconds (RFC 9110 §10.2.3)',
+          );
+        }
         limited = true;
         break;
+      }
+      // A 403 here is the pre-Phase-28 behaviour and must fail loudly rather
+      // than being accepted as "some refusal happened".
+      if (status === 403 && /rate limit/i.test(json?.error?.message ?? '')) {
+        throw new Error(
+          'the image answered 403 Forbidden for an exhausted rate-limit budget. That is the N-12 defect: ' +
+            'throttling must be 429, and 403 is indistinguishable from an authorization failure.',
+        );
       }
     }
     assert(
@@ -1022,6 +1055,54 @@ async function main() {
         'so credential stuffing is unthrottled in the artifact a deployment actually runs.',
     );
     return 'a rate-limit refusal was produced within the production budget';
+  });
+
+  await check('authorization refusals in the image are 403, not 429', async () => {
+    // The converse of the check above, and the one that catches a "fix"
+    // implemented by widening every 4xx to 429.
+    //
+    // `GET /seniors/<uuid>/medications` is guarded by JwtAuthGuard +
+    // RolesGuard and is NOT decorated with `@RateLimit()`, so the limiter
+    // cannot influence it. The gate's own valid access token is used, and a
+    // random senior id guarantees no care-circle membership, so
+    // `assertCanAccessSenior` throws a genuine ForbiddenException. A control
+    // assertion first proves the route is reachable at all — a 401 or 404
+    // here would mean the 403 was produced by something other than the
+    // authorization check, and the check below would be vacuous.
+    const seniorId = randomUUID();
+    const res = await fetch(`${API_BASE_RAW}/seniors/${seniorId}/medications`, {
+      headers: { authorization: `Bearer ${gateAccessToken}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      /* asserted below */
+    }
+    assert(
+      res.status === 403,
+      `an authenticated user with no care-circle membership was answered ${res.status} on a senior-scoped route, ` +
+        `not 403. Body: ${text.slice(0, 200)}. Phase 28 changed the rate-limit status only; an authorization ` +
+        'refusal must be unaffected.',
+    );
+    assert(
+      json?.error?.code === 'FORBIDDEN',
+      `the authorization refusal reported code ${JSON.stringify(json?.error?.code)}, expected FORBIDDEN`,
+    );
+    assert(
+      json?.error?.code !== 'RATE_LIMITED',
+      'an authorization refusal was reported as RATE_LIMITED; 403 and 429 are no longer distinguishable',
+    );
+    // A genuine authorization refusal is terminal: retrying will not help,
+    // so advertising a retry delay would be a lie.
+    assert(
+      res.headers.get('retry-after') === null,
+      `a 403 authorization refusal advertised Retry-After: ${res.headers.get('retry-after')}; only a throttled ` +
+        'response may carry one',
+    );
+    return 'a real authorization refusal is 403 FORBIDDEN with no Retry-After';
   });
 
   // ------------------------------------------------- Phase 21 (L-03)

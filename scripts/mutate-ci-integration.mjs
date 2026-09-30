@@ -235,6 +235,16 @@ function makeMirror() {
   mkdirSync(path.join(root, 'apps', 'api'), { recursive: true });
   cpSync(path.join(repoRoot, 'apps', 'api', 'scripts'), path.join(root, 'apps', 'api', 'scripts'), { recursive: true });
   cpSync(path.join(repoRoot, 'apps', 'api', 'package.json'), path.join(root, 'apps', 'api', 'package.json'));
+  // Phase 32. The contract now resolves EVERY step's command, not only the
+  // declared required gates, so it reads the `package.json` of every package a
+  // step filters on — including the `mobile` and `web` jobs. The same reasoning
+  // as above applies: a mirror that omits a file the contract names makes the
+  // unmutated CONTROL fail for a reason that has nothing to do with the mutant
+  // under test, which would render every result meaningless.
+  for (const pkg of ['mobile', 'web']) {
+    mkdirSync(path.join(root, 'apps', pkg), { recursive: true });
+    cpSync(path.join(repoRoot, 'apps', pkg, 'package.json'), path.join(root, 'apps', pkg, 'package.json'));
+  }
   // `yaml` must resolve from the mirror; the store is shared, not copied.
   symlinkSync(path.join(repoRoot, 'node_modules'), path.join(root, 'node_modules'), 'dir');
   cpSync(path.join(repoRoot, workflowRel), path.join(root, workflowRel));
@@ -589,11 +599,25 @@ MUTANTS.contractIds = [
 // Run the gate against a mirror
 // ---------------------------------------------------------------------------
 function runParity(root) {
+  // Phase 32. `PATH` and `HOME` are deliberately NOT forwarded.
+  //
+  // They used to be, and that was the entire cause of hosted run 36618193752's
+  // `api` job failure. The child is spawned by ABSOLUTE interpreter path
+  // (`process.execPath`) and `--list` executes nothing, so it needs neither to
+  // resolve nor to run; forwarding them only made this file *read* `PATH` and
+  // `HOME`, which `verify-config-contract.mjs` then correctly reported as two
+  // environment variables that are read by code and documented in no template.
+  //
+  // The failure was real and the contract was right to raise it. The defect was
+  // the unnecessary dependency, not the assertion, so the dependency is removed
+  // here rather than the assertion being relaxed in the config contract. A
+  // harness that inherited the developer's PATH made the gate's result depend on
+  // whose shell ran it; this one is now identical on a laptop and on a runner.
   const res = spawnSync(process.execPath, [path.join(root, 'scripts', 'verify-ci-parity.mjs'), '--list'], {
     cwd: root,
     encoding: 'utf8',
     timeout: 300_000,
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, CI: '1', FORCE_COLOR: '0' },
+    env: { CI: '1', FORCE_COLOR: '0' },
   });
   const output = `${res.stdout ?? ''}\n${res.stderr ?? ''}`;
   return {

@@ -37,6 +37,7 @@
  * truthful result. The developer database `ecc` is never a target.
  */
 import { spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -482,6 +483,271 @@ function gateTargetProblem(target) {
   return `unknown target kind \`${target.kind}\` — the gate contract itself is malformed.`;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 32 — resolvability of every CI command
+// ---------------------------------------------------------------------------
+
+/**
+ * Is `p` unambiguously a path to a file this repository owns?
+ *
+ * Requires BOTH a separator and an extension on the last segment, so that a
+ * bare name (`pnpm-lock.yaml`), a flag, a port, or a glob cannot be mistaken for
+ * a file. This is the same discriminator the Phase 29 target check uses, kept
+ * deliberately conservative: a false "this must exist" on a command that never
+ * needed it would make the contract untrustworthy, and an untrustworthy
+ * contract gets ignored.
+ */
+function isRepoFilePath(p) {
+  if (!p || p.startsWith('-')) return false;
+  if (p.includes('*') || p.includes('$') || p.includes('`')) return false;
+  if (!p.includes('/')) return false;
+  const last = p.split('/').pop() ?? '';
+  return /\.[A-Za-z0-9]+$/.test(last);
+}
+
+/**
+ * A token naming a set of files rather than one file — an eslint argument
+ * with a brace/glob pattern such as the lint script's `"{src,test}"` tree.
+ *
+ * `isRepoFilePath` already rejects a bare `*`, but a shell glob that has been
+ * unquoted still looks like a path with an extension, and it must never be
+ * required to exist. Braces are therefore excluded here as well.
+ */
+function isGlobToken(t) {
+  return /[*?[\]{}]/.test(t);
+}
+
+/**
+ * The working directory a step's command runs in: a leading `cd X &&` if any.
+ */
+function stepCwd(step) {
+  const m = /^\s*cd\s+(\S+)\s*&&\s*/.exec(step.run ?? '');
+  return m ? path.resolve(repoRoot, m[1]) : repoRoot;
+}
+
+/**
+ * Split a step's command into the pieces that actually execute, each carrying
+ * the directory it would run in.
+ *
+ * A workflow `run:` is usually a multi-line block, so `cd apps/api` is typically
+ * a line of its own rather than a `cd X && …` prefix. Collapsing the block to one
+ * string and looking only for a leading `cd` therefore resolves every operand
+ * against the repository root and reports files that are present in the package
+ * as missing. Splitting on newlines and `&&`, and treating a standalone `cd` as a
+ * directory change, models the shell closely enough for a static check without
+ * pretending to be a shell.
+ */
+function stepSegments(step) {
+  // `pnpm --filter <pkg> …` runs the command with the PACKAGE as its working
+  // directory, not the repository root. A step written as
+  // `pnpm --filter @ecc/api exec node ../../scripts/x.mjs` therefore resolves
+  // `../../scripts/x.mjs` from `apps/api`. Seeding the cwd from the filter is
+  // what makes that step resolve to `scripts/x.mjs` rather than to a path above
+  // the repository.
+  const filtered = filterScriptOf(step.run) ?? /\bpnpm\s+(?:run\s+)?--filter\s+(\S+)/.exec(step.run ?? '');
+  const filterDir = filtered ? pkgNameToDir.get(filtered[1] ?? filtered.pkg) : null;
+  let cwd = filterDir ? path.join(repoRoot, filterDir) : repoRoot;
+  const out = [];
+  for (const raw of (step.run ?? '').split(/\r?\n|&&/)) {
+    const seg = stripShellComments(raw).trim();
+    if (!seg) continue;
+    const cd = /^cd\s+(\S+)\s*$/.exec(seg);
+    if (cd) {
+      // An explicit `cd` inside a `--filter` command is still relative to that
+      // command's own working directory, so resolve it against the current cwd.
+      cwd = path.resolve(cwd, cd[1]);
+      continue;
+    }
+    out.push({ cwd, text: seg });
+  }
+  return out;
+}
+
+/**
+ * Paths a job builds for itself, judged RELATIVE to the directory the command
+ * runs in (so `node dist/main.js` from `apps/api` is `dist/…`, not
+ * `apps/api/dist/…`).
+ */
+const GENERATED_PREFIXES = ['dist/', 'build/', 'out/', 'coverage/', '.next/', 'node_modules/'];
+
+function isGeneratedOutput(relFromCwd) {
+  const norm = relFromCwd.split(path.sep).join('/');
+  return GENERATED_PREFIXES.some((p) => norm.startsWith(p));
+}
+
+const pkgScriptsCache = new Map();
+function packageScripts(pkgDirRel) {
+  if (pkgScriptsCache.has(pkgDirRel)) return pkgScriptsCache.get(pkgDirRel);
+  const pkgPath = path.join(repoRoot, pkgDirRel, 'package.json');
+  let out = null;
+  if (existsSync(pkgPath)) {
+    try {
+      out = JSON.parse(readFileSync(pkgPath, 'utf8')).scripts ?? {};
+    } catch {
+      out = null;
+    }
+  }
+  pkgScriptsCache.set(pkgDirRel, out);
+  return out;
+}
+
+/**
+ * The single script a `pnpm --filter <pkg> <script>` step invokes, or null.
+ *
+ * `pnpm exec` / `pnpm install` are not scripts and are deliberately not matched:
+ * they resolve a binary from the workspace rather than a declared script entry.
+ */
+function filterScriptOf(run) {
+  const m = /\bpnpm\s+(?:run\s+)?--filter\s+(\S+)\s+([A-Za-z0-9:_-]+)/.exec(run);
+  if (!m) return null;
+  const [, pkg, script] = m;
+  if (script === 'exec' || script === 'install' || script === 'dlx') return null;
+  return { pkg, script };
+}
+
+const pkgNameToDir = new Map([
+  ['@ecc/api', 'apps/api'],
+  ['@ecc/mobile', 'apps/mobile'],
+  ['@ecc/web', 'apps/web'],
+  ['@ecc/config', 'packages/config'],
+  ['@ecc/ui', 'packages/ui'],
+]);
+
+/**
+ * Phase 32. Resolve what a step's command actually needs, and report anything
+ * that cannot be found.
+ *
+ * Why this exists. Hosted run 36618193752 failed with
+ * `ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT ... "verify:storage:backup"`: the workflow
+ * referenced a Phase 28 gate whose package script and backing file were never
+ * committed. The required-gate target check already knew how to report that,
+ * and DID report it correctly when it was allowed to run — but the broken step
+ * sat *earlier* in the job than the contract step, so the run died on the
+ * symptom first and the diagnosis was never reached.
+ *
+ * This check closes the remaining half of the gap: it resolves EVERY step, not
+ * only the declared required gates, so drift in a non-gate step is reported as
+ * a contract problem rather than as an unexplained runner failure. And it
+ * separately reports targets that exist on disk but are untracked, which is the
+ * exact condition that made local parity green while hosted CI was red.
+ */
+/**
+ * The files a step's `node`/`bash`/`sh` command will actually execute, as paths
+ * relative to the repository root, excluding build output the job produces
+ * itself.
+ *
+ * Only the interpreter's FIRST non-flag operand counts. Requiring every
+ * path-looking token would be wrong twice over: it would treat operands such as
+ * `test -f dist/main.js` as dependencies, and it would make the contract
+ * sensitive to where in a compound command a path happens to appear.
+ */
+function executedFileTargets(step) {
+  const out = [];
+  for (const seg of stepSegments(step)) {
+    const toks = seg.text.split(' ').filter(Boolean);
+    for (const [i, tok] of toks.entries()) {
+      if (tok !== 'node' && tok !== 'bash' && tok !== 'sh') continue;
+      let j = i + 1;
+      while (j < toks.length && toks[j].startsWith('-')) j += 1;
+      const operand = toks[j];
+      if (!operand || !isRepoFilePath(operand)) continue;
+      const abs = path.resolve(seg.cwd, operand);
+      const relCwd = path.relative(seg.cwd, abs);
+      if (isGeneratedOutput(relCwd)) continue; // produced by this job, never committed
+      out.push({ operand, cwd: seg.cwd, rel: path.relative(repoRoot, abs) });
+    }
+  }
+  return out;
+}
+
+function resolvabilityProblem(step) {
+  const filtered = filterScriptOf(step.run);
+  if (filtered) {
+    const dir = pkgNameToDir.get(filtered.pkg);
+    if (!dir) return null; // an unknown filter is not this check's business
+    const scripts = packageScripts(dir);
+    if (scripts === null) {
+      return `it invokes \`pnpm --filter ${filtered.pkg} ${filtered.script}\`, but \`${dir}/package.json\` is missing or unparseable.`;
+    }
+    if (!Object.hasOwn(scripts, filtered.script)) {
+      return (
+        `it invokes \`pnpm --filter ${filtered.pkg} ${filtered.script}\`, but that script is not defined in ` +
+        `\`${dir}/package.json\`. The runner will fail with ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT.`
+      );
+    }
+    for (const token of fileTokensOfScript(scripts[filtered.script])) {
+      if (isGlobToken(token)) continue;
+      if (!existsSync(path.resolve(repoRoot, dir, token))) {
+        return (
+          `the script \`${dir}:${filtered.script}\` is \`${scripts[filtered.script]}\`, but \`${token}\` does not exist. ` +
+          'The gate is wired to a target that is not in the tree.'
+        );
+      }
+    }
+    return null;
+  }
+
+  for (const t of executedFileTargets(step)) {
+    if (!existsSync(path.resolve(t.cwd, t.operand))) {
+      return (
+        `it runs \`${t.operand}\`, but that file does not exist relative to ` +
+        `\`${path.relative(repoRoot, t.cwd) || '.'}\`. The runner will fail on a file that is not in the tree.`
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Phase 32. A target that exists on disk but is untracked is the specific
+ * condition that let local parity report green while the committed tree could
+ * not run: the file was present in the developer's working tree and absent from
+ * the commit the runner checks out.
+ *
+ * Only meaningful inside a git work tree, so it is skipped when the contract is
+ * run from an export or a tarball — in that situation existence is the only
+ * property available, and claiming more would be false.
+ */
+function untrackedTargetProblem(step) {
+  if (!existsSync(path.join(repoRoot, '.git'))) return null;
+  let listed;
+  try {
+    listed = new Set(
+      execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+        .split('\0')
+        .filter(Boolean),
+    );
+  } catch {
+    return null; // not a git work tree, or git unavailable: do not invent a verdict
+  }
+
+  const needed = new Set();
+  const filtered = filterScriptOf(step.run);
+  if (filtered) {
+    const dir = pkgNameToDir.get(filtered.pkg);
+    const scripts = dir ? packageScripts(dir) : null;
+    if (dir && scripts && Object.hasOwn(scripts, filtered.script)) {
+      for (const token of fileTokensOfScript(scripts[filtered.script])) {
+        if (isGlobToken(token)) continue;
+        needed.add(path.relative(repoRoot, path.resolve(repoRoot, dir, token)));
+      }
+    }
+  } else {
+    for (const t of executedFileTargets(step)) needed.add(t.rel);
+  }
+
+  for (const rel of needed) {
+    if (!listed.has(rel)) {
+      return (
+        `\`${rel}\` is required by this step but is NOT tracked by git. A clean checkout — which is what a CI ` +
+        'runner sees — will not contain it, so this step cannot work there even though it works in this ' +
+        'working tree. Commit the file, or remove the step.'
+      );
+    }
+  }
+  return null;
+}
+
 /**
  * Constructs that make a check un-failable no matter what the step says.
  * These are checked per required gate, because a required gate is by
@@ -501,6 +767,25 @@ function suppressionProblem(step) {
     }
   }
   return null;
+}
+
+// --- Phase 32: every step's command must resolve in the committed tree ------
+//
+// Ordered deliberately BEFORE the required-gate loop's own reporting matters
+// not; what matters is that this runs as part of the same contract, so the
+// diagnosis is available in the same invocation that the runner performs.
+let resolvableSteps = 0;
+for (const s of runSteps) {
+  const unresolvable = resolvabilityProblem(s);
+  if (unresolvable) {
+    problems.push(`step "${s.name}" (job \`${s.job}\`) cannot work on a clean checkout: ${unresolvable}`);
+  } else {
+    resolvableSteps += 1;
+  }
+  const untracked = untrackedTargetProblem(s);
+  if (untracked) {
+    problems.push(`step "${s.name}" (job \`${s.job}\`) depends on a file that is not committed: ${untracked}`);
+  }
 }
 
 for (const gate of REQUIRED_GATES) {

@@ -33,7 +33,19 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (res.status === 401 || res.status === 403) {
-    // Clear session on auth failure; caller should redirect
+    // Clear session on auth failure; caller should redirect.
+    //
+    // Phase 28 (N-12): 429 is deliberately NOT in this list. The API used
+    // to answer an exhausted rate-limit budget with 403, so being throttled
+    // deleted the user's stored access token and logged them out — a
+    // throttling condition was indistinguishable from bad credentials, and
+    // the correct client response (wait, then retry) destroyed the session
+    // instead. The API now answers 429, which falls through to the generic
+    // error path below and leaves the token intact.
+    //
+    // This asymmetry is the reason the status change mattered beyond
+    // cosmetics. It is covered by a spec asserting the token SURVIVES a
+    // 429, so a future change that lumps 429 in with 401/403 fails.
     await deleteAccessToken();
   }
 

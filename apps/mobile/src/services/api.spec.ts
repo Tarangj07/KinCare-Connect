@@ -102,6 +102,60 @@ describe('API Client Security', () => {
     expect(mockStore.get('ecc_access_token')).toBeUndefined();
   });
 
+  it('HTTP 429 does NOT destroy a valid session (Phase 28 N-12)', async () => {
+    // The API answers an exhausted rate-limit budget with 429, not 403.
+    // Before that fix, being throttled matched the `401 || 403` branch
+    // below and deleted the access token, logging the user out for
+    // something that is not an authentication failure and that resolves on
+    // its own once the window passes. This asserts the token SURVIVES, and
+    // the error is still surfaced rather than swallowed, so the caller can
+    // back off.
+    const { apiFetch, ApiError } = await import('./api');
+    await import('./session').then(async (s) => {
+      await s.storeAccessToken('token_429_valid');
+    });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'retry-after': '742' }),
+      text: async () => JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded. Try again later.', requestId: 'r' } }),
+    } as Response);
+
+    try {
+      await apiFetch('/protected');
+      expect.fail('a 429 must still reject, so the caller can back off');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ApiError);
+      expect((e as InstanceType<typeof ApiError>).status).toBe(429);
+    }
+
+    // The session survives: no redirect, no re-login, no lost token.
+    expect(mockStore.get('ecc_access_token')).toBe('token_429_valid');
+  });
+
+  it('a 429 does not leak the server response body into the error message', async () => {
+    // Same property as the 500 case, re-asserted for the throttling path:
+    // the retry hint a caller needs is the status, not the server's prose.
+    const { apiFetch, ApiError } = await import('./api');
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Headers({}),
+      text: async () => 'Rate limit exceeded for user alice@example.com from 10.0.0.7',
+    } as Response);
+
+    try {
+      await apiFetch('/protected');
+      expect.fail('should have thrown');
+    } catch (e) {
+      const err = e as InstanceType<typeof ApiError>;
+      expect(err.message).toBe('Request failed (429)');
+      expect(err.message).not.toContain('alice@example.com');
+      expect(err.message).not.toContain('10.0.0.7');
+    }
+  });
+
   it('safe ApiError behavior is preserved', async () => {
     const { apiFetch, ApiError } = await import('./api');
     global.fetch = vi.fn().mockResolvedValue({

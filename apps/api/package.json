@@ -13,6 +13,8 @@
     "verify:routes:mutate": "node scripts/mutate-route-authorization.mjs",
     "verify:lifetime:mutate": "node scripts/mutate-token-lifetime.mjs",
     "verify:auth:compiled": "node scripts/verify-compiled-auth-suite.mjs",
+    "verify:ratelimit:n12:mutate": "node ../../scripts/mutate-rate-limit-n12.mjs",
+    "verify:storage:backup": "node ../../scripts/verify-storage-backup-restore.mjs",
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "start:dev": "nest start --watch",

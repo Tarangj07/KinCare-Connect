@@ -51,9 +51,9 @@
  * ten. Rather than disable the limiter — which would mean proving the
  * artifact under a weakened control, and would also let the script run twice
  * without noticing — each mode is designed to stay inside one budget and is
- * run against a FRESHLY STARTED server process. A 403 "Rate limit exceeded"
- * is reported as the distinct, expected signal it is, never as an auth
- * failure.
+ * run against a FRESHLY STARTED server process. A 429 "Rate limit exceeded"
+ * (403 before Phase 28) is reported as the distinct, expected signal it is,
+ * never as an auth failure.
  *
  * Usage:  node scripts/verify-compiled-auth.mjs [baseUrl] [--mode <mode>]
  *         node scripts/verify-compiled-auth.mjs --modes        (all of them)
@@ -119,7 +119,22 @@ async function req(path, { method = 'GET', token, body, cookie, headers = {} } =
 }
 
 const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
-const isRateLimited = (r) => r.status === 403 && /rate limit/i.test(r.json?.error?.message ?? '');
+/**
+ * Identify a throttled response.
+ *
+ * Phase 28 (N-12): the limiter answers 429, so that is the status expected
+ * from the artifact this script builds. 403 is still accepted, and only for
+ * this one predicate, because the gate must keep reporting a *throttle* the
+ * same way whether it is talking to a pre-Phase-28 process or a current one
+ * — silently reclassifying an old 403 as a genuine authorization refusal
+ * would turn a version mismatch into a misleading failure.
+ *
+ * The message test is retained deliberately: status alone cannot separate a
+ * throttled request from any other 429, and a 403 that is not a throttle
+ * (a role refusal) must not be swallowed by this predicate.
+ */
+const isRateLimited = (r) =>
+  (r.status === 429 || r.status === 403) && /rate limit/i.test(r.json?.error?.message ?? '');
 
 // --- optional database access (account state, stored-hash proof) -----------
 let prisma = null;
