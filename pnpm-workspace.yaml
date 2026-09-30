@@ -1,6 +1,35 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+
+# Phase 33 — supply-chain remediation for the advisories that blocked CI in
+# run 36671794473 (blocker P32-1). These are TRANSITIVE dependencies; the fix is
+# therefore an override, not a manifest change.
+#
+# Each entry is keyed by the vulnerable RANGE rather than by a bare package name,
+# because two major lines of `brace-expansion` are present in the graph and they
+# are requested by different parents with incompatible ranges:
+#   brace-expansion 1.x  <- minimatch@3  (requests ^1.1.7)
+#   brace-expansion 2.x  <- minimatch@9  (requests ^2.0.2)
+# A single unversioned `brace-expansion` override would force one line onto the
+# other and break the install, so the two are pinned separately.
+#
+# Each target is the HIGHEST patch floor across EVERY advisory open against that
+# package, not the floor of the highest-severity one alone. Advising on the lowest
+# floor would leave the remaining advisories in place and the gate would still
+# fail:
+#   brace-expansion 1.x : 1.1.19 (high), 1.1.20 (high), 1.1.21 (moderate) -> 1.1.21
+#   brace-expansion 2.x : 2.1.5 (high), 2.1.6 (high), 2.1.7 (moderate) -> 2.1.7
+#   undici              : 6.28.1 (high), 6.28.1 (moderate), 6.28.1 (low) -> 6.28.1
+#
+# All three are patch-level upgrades inside the major version their parent
+# already requests, so no parent is forced outside its declared range and no
+# unrelated package is upgraded.
+overrides:
+  'brace-expansion@>=1.0.0 <1.1.21': 1.1.21
+  'brace-expansion@>=2.0.0 <2.1.7': 2.1.7
+  'undici@<6.28.1': 6.28.1
+
 allowBuilds:
   '@nestjs/core': true
   '@prisma/client': true
