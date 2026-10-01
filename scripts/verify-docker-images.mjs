@@ -39,7 +39,14 @@
  *        application inside the read-only image.
  *
  *   Web container
- *    15. The home page, /dashboard and /health render 200.
+ *    15. An anonymous GET / and GET /dashboard both answer a redirect to
+ *        /login and render no authenticated-shell content and no session
+ *        cookie; /login itself is reachable; the server-only
+ *        API_INTERNAL_URL never appears in anything served to a browser.
+ *        (Phase 50 CI reconciliation: these were previously `the home page
+ *        renders 200` asserting the pre-Phase-50 placeholder landing page and
+ *        `dashboard route renders`, the latter having passed only because
+ *        `fetch` follows redirects — see the web section for the reasoning.)
  *    16. A hashed static asset is served (proves the static copy path).
  *    17. /health reports the live API as ok (proves NEXT_PUBLIC_API_URL
  *        still flows from the runtime environment), and an unknown route
@@ -127,16 +134,16 @@ function docker(args, opts = {}) {
   return (res.stdout || '').trim();
 }
 
-async function waitForHttp(url, { timeoutMs = 60_000, expect } = {}) {
+async function waitForHttp(url, { timeoutMs = 60_000, expect, redirect } = {}) {
   const deadline = Date.now() + timeoutMs;
   let last = 'no attempt made';
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000), ...(redirect ? { redirect } : {}) });
       const body = await res.text();
       last = `HTTP ${res.status}`;
       if (expect) expect(res, body);
-      return { status: res.status, body };
+      return { status: res.status, body, headers: res.headers };
     } catch (err) {
       last = String(err.cause?.code ?? err.message);
       await new Promise((r) => setTimeout(r, 1000));
@@ -144,6 +151,15 @@ async function waitForHttp(url, { timeoutMs = 60_000, expect } = {}) {
   }
   throw new Error(`timed out waiting for ${url} (last: ${last})`);
 }
+
+/**
+ * The CSS-module class of the authenticated layout
+ * (`apps/web/src/app/(authenticated)/shell.module.css`), so it appears in the
+ * markup of any page rendered inside that layout and on no other route. Used in
+ * preference to visible copy: rewording the interface must not silently turn a
+ * security assertion into a vacuous one.
+ */
+const SHELL_MARKER = 'shell_shell__';
 
 function cleanup() {
   for (const c of containers) spawnSync('docker', ['rm', '-f', c], { encoding: 'utf8' });
@@ -1232,29 +1248,130 @@ async function main() {
   docker([
     'run', '-d', '--name', webName, '--network', NET, '-p', `127.0.0.1:${WEB_PORT}:3001`,
     '-e', `NEXT_PUBLIC_API_URL=http://${apiName}:3000`,
+    // Phase 50 CI reconciliation. The server-only base URL the web app's BFF
+    // uses for its server-to-server calls is now part of the documented
+    // deployment contract (.env.example, apps/web/.env.example). Supplying it
+    // here is what makes this gate an end-to-end test of that contract rather
+    // than an assertion that the variable is merely mentioned. It also creates
+    // the leak check below: the value is a container-internal alias that must
+    // never appear in anything the browser receives.
+    '-e', `API_INTERNAL_URL=http://${apiName}:3000`,
     WEB_IMAGE,
   ]);
 
-  await check('home page renders 200', async () => {
+  // --- Phase 50 CI reconciliation: the root route's contract ---------------
+  //
+  // `home page renders 200` asserted that `/` served the Phase 1 placeholder
+  // landing page ("Elderly Care Coordination"). Phase 50 deliberately replaced
+  // it: `apps/web/src/app/page.tsx` resolves the session on the SERVER and
+  // redirects, so an anonymous caller receives 307 to /login and no landing
+  // markup for anyone (docs/PHASE_50_FINAL_REPORT.md §8, §19; PR-48-19).
+  //
+  // Restoring placeholder content to satisfy this assertion would reintroduce
+  // PR-48-19's inverse — a public route the authentication boundary is supposed
+  // to own — so the assertion is replaced, not the application.
+  //
+  // `fetch` follows redirects by default, which is precisely why the old check
+  // was silently weak: it saw 200 because it had been redirected to /login, not
+  // because any dashboard rendered. Everything below therefore uses
+  // `redirect: 'manual'` and asserts the redirect itself.
+  const internalAlias = `${apiName}:3000`;
+  const internalUrl = `http://${internalAlias}`;
+
+  await check('the root route redirects an anonymous caller to /login (no public landing page)', async () => {
     const res = await waitForHttp(`http://127.0.0.1:${WEB_PORT}/`, {
-      expect: (r) => assert(r.status === 200, `expected 200, got ${r.status}`),
+      redirect: 'manual',
+      expect: (r) => {
+        assert(
+          r.status >= 300 && r.status < 400,
+          `expected a redirect, got ${r.status} — / must not serve a public landing page`,
+        );
+      },
     });
-    assert(/Elderly Care Coordination/.test(res.body), 'home page did not render the expected content');
-    return '200 with expected content';
+    const location = res.headers.get('location') ?? '';
+    assert(/^\/login/.test(location), `redirect target is "${location}", expected /login`);
+    assert(
+      !res.body.includes(SHELL_MARKER),
+      `the anonymous / response body contains "${SHELL_MARKER}" — the authenticated shell rendered for an ` +
+        'unauthenticated caller',
+    );
+    assert(
+      !/ecc_at=/i.test(res.headers.get('set-cookie') ?? ''),
+      'the anonymous / response set a session cookie',
+    );
+    return `${res.status} -> ${location}`;
   });
 
-  await check('dashboard route renders', async () => {
+  await check('an authenticated route also redirects an anonymous caller and serves no protected content', async () => {
     const res = await waitForHttp(`http://127.0.0.1:${WEB_PORT}/dashboard`, {
+      redirect: 'manual',
+      expect: (r) => {
+        assert(
+          r.status >= 300 && r.status < 400,
+          `expected a redirect, got ${r.status} — /dashboard must not be reachable without authentication`,
+        );
+      },
+    });
+    const location = res.headers.get('location') ?? '';
+    assert(/^\/login/.test(location), `redirect target is "${location}", expected /login`);
+    assert(
+      !res.body.includes(SHELL_MARKER),
+      `the anonymous /dashboard response body contains "${SHELL_MARKER}" — protected content was rendered for an ` +
+        'unauthenticated caller',
+    );
+    assert(
+      !/ecc_at=/i.test(res.headers.get('set-cookie') ?? ''),
+      'the anonymous /dashboard response set a session cookie',
+    );
+    return `${res.status} -> ${location}`;
+  });
+
+  await check('the login route the redirect points at is reachable in the shipped image', async () => {
+    const res = await waitForHttp(`http://127.0.0.1:${WEB_PORT}/login`, {
       expect: (r) => assert(r.status === 200, `expected 200, got ${r.status}`),
     });
-    return `HTTP ${res.status}`;
+    assert(
+      res.body.includes('signin-heading'),
+      'the login page did not render the sign-in form; the redirect target is not a real page',
+    );
+    return '200, sign-in form present';
+  });
+
+  await check('the server-only API_INTERNAL_URL never reaches anything the browser receives', async () => {
+    // API_INTERNAL_URL has no NEXT_PUBLIC_ prefix, so Next.js substitutes it on
+    // the server at request time and never inlines it into a client bundle. That
+    // claim is asserted at runtime here, against the shipped image, by checking
+    // that the internal container alias — a value only the server knows — does
+    // not appear in the HTML served to a browser.
+    //
+    // The positive control comes first and is not optional: an absence check
+    // over an environment variable that was never applied would pass
+    // vacuously, proving nothing about substitution.
+    const inContainer = docker(['exec', webName, 'printenv', 'API_INTERNAL_URL']);
+    assert(
+      inContainer === internalUrl,
+      `API_INTERNAL_URL inside the web container is "${inContainer}", expected "${internalUrl}" — the ` +
+        'leak check below would otherwise pass because the variable was never set, not because it stayed server-side',
+    );
+    for (const path of ['/', '/login', '/health']) {
+      const res = await fetch(`http://127.0.0.1:${WEB_PORT}${path}`);
+      const html = await res.text();
+      assert(
+        !html.includes(internalAlias),
+        `${path} leaked the internal API address "${internalAlias}" to the browser bundle`,
+      );
+    }
+    return `set inside the container, served to no page`;
   });
 
   await check('static assets are served', async () => {
-    const home = await fetch(`http://127.0.0.1:${WEB_PORT}/`);
+    // Fetched from /login, which is the page an anonymous caller actually
+    // reaches. Fetching / would have followed the redirect silently and proved
+    // nothing about which page the assertion is about.
+    const home = await fetch(`http://127.0.0.1:${WEB_PORT}/login`);
     const html = await home.text();
     const asset = html.match(/\/_next\/static\/css\/[A-Za-z0-9]+\.css/);
-    assert(asset, 'no hashed CSS asset referenced by the home page');
+    assert(asset, 'no hashed CSS asset referenced by the sign-in page');
     const res = await fetch(`http://127.0.0.1:${WEB_PORT}${asset[0]}`);
     assert(res.status === 200, `static asset returned ${res.status}`);
     return asset[0];

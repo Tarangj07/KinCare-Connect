@@ -55,8 +55,57 @@
  *      transformed image.
  *
  *   4. NON-REGRESSION — unrelated routes still answer. Disabling a security
- *      surface by breaking the application is not a remediation, so `/` and
- *      `/health` are asserted to still return 200.
+ *      surface by breaking the application is not a remediation.
+ *
+ *      Phase 50 CI reconciliation. This layer used to assert `/` returns 200.
+ *      That assertion encoded the PRE-Phase-50 application: `/` was then a
+ *      PUBLIC placeholder landing page ("Phase 1 · Foundation"), so 200 was
+ *      correct. Phase 50 deliberately replaced it — `apps/web/src/app/page.tsx`
+ *      is now a Server Component that resolves the session and redirects, so an
+ *      anonymous `GET /` answers 307 to `/login` and NO landing markup is
+ *      produced for either audience (docs/PHASE_50_FINAL_REPORT.md §8, §19;
+ *      PR-48-19).
+ *
+ *      The INVARIANT this layer exists to protect is unchanged — "the app was
+ *      not broken to close the image endpoint" — but a broken-app regression
+ *      and the intended redirect must be distinguishable, and only the
+ *      CONTRACT can tell them apart. A 200 assertion cannot: it is satisfied by
+ *      the redirect being reverted to a public page, which is precisely the
+ *      security regression this reconciliation must not introduce, and it is
+ *      unsatisfiable by the intended behaviour. Changing 200 -> 307 would be
+ *      worse: it would assert a status code and nothing about the destination,
+ *      so a redirect to any page — including a 404 — would pass.
+ *
+ *      What is asserted instead, all against the SAME running server and the
+ *      SAME unauthenticated probe used for the image endpoint:
+ *
+ *        4a. `GET /` is a redirect (3xx) whose `Location` resolves to the
+ *            login route — not a 404, not a 500, not a dead link.
+ *        4b. `GET /login` — that destination — answers 200 and renders the
+ *            sign-in page, identified by the `aria-labelledby` target
+ *            `signin-heading` from `apps/web/src/app/login/page.tsx`. Every
+ *            Next page embeds the not-found template in its RSC payload, so the
+ *            404 copy cannot be used to identify a 404 and is not used.
+ *        4c. The unauthenticated `/` response body carries none of the
+ *            authenticated shell's CSS-module classes (`shell_shell__`, from
+ *            `apps/web/src/app/(authenticated)/shell.module.css`, which appears
+ *            on any page inside that layout and on no other route) and sets no
+ *            `ecc_at` session cookie. This keeps P35-1's non-regression layer
+ *            honest about the Phase 50 boundary: it now additionally proves that
+ *            closing the image endpoint was NOT accompanied by opening the root
+ *            route. A structural marker is used rather than visible copy so that
+ *            rewording the interface cannot turn the check into a vacuous one.
+ *        4d. `/dashboard` — a route INSIDE the authenticated layout — must
+ *            apply the same contract, and must not contain the shell marker.
+ *            This is what makes 4c falsifiable: `/` never renders the shell, so
+ *            the marker test there alone cannot distinguish a working guard from
+ *            a deleted one. A removed or weakened guard in
+ *            `apps/web/src/app/(authenticated)/layout.tsx` makes this probe
+ *            answer 200 with `shell_shell__` in the body and the check fails.
+ *        4e. `/health` still answers 200, unchanged from before Phase 50.
+ *
+ *      Nothing about the image-optimizer assertion itself (layers 1-3) is
+ *      altered.
  *
  * Every layer fails closed. If the build is missing, this gate FAILS; it never
  * reports success because a check could not run.
@@ -285,11 +334,78 @@ if (!configOnly) {
         const bare = await probe(port, '/_next/image');
         check('/_next/image without parameters is not a 200 image', bare.status !== 200 || !/^image\//.test(bare.contentType), `status=${bare.status}`);
 
-        // --- non-regression: the application must still work
-        for (const route of ['/', '/health']) {
-          const r = await probe(port, route);
-          check(`${route} still answers 200 (the app was not broken to close the endpoint)`, r.status === 200, `status=${r.status}`);
-        }
+        // --- non-regression: the application must still work.
+        //
+        // Phase 50 reconciliation. `/` is no longer a public landing page, so
+        // the invariant is asserted as the CONTRACT (see the header, layer 4):
+        // the root route must resolve, its redirect target must be real, and it
+        // must not be leaking the authenticated shell. Status codes alone
+        // cannot express any of that.
+        const root = await probe(port, '/');
+        const location = /^\/(?:[^/?#]*)(?:\/.*)?$/.test(root.location) ? root.location : '';
+        check(
+          '/ is a redirect to the login route (the app was not broken, and the root route was not made public)',
+          root.status >= 300 && root.status < 400 && location.startsWith('/login'),
+          `status=${root.status} location=${root.location || '(none)'} — an anonymous GET / must answer a redirect ` +
+            'to /login; a 200 here would mean the root route was reverted to the pre-Phase-50 public landing page',
+        );
+
+        const login = await probe(port, '/login');
+        check(
+          'the login route / redirects to answers 200 and renders the sign-in page, not the 404 page',
+          login.status === 200 && login.bodyText.includes('signin-heading'),
+          `status=${login.status} bytes=${login.bytes} signin-heading=${
+            login.bodyText.includes('signin-heading') ? 'present' : 'ABSENT'
+          } — the redirect target must be the real sign-in page. (A substring test is required in BOTH ` +
+            'directions: every Next page embeds the not-found template in its RSC payload, so the 404 text alone ' +
+            'cannot identify a 404. `signin-heading` is the `aria-labelledby` target of the card in ' +
+            'apps/web/src/app/login/page.tsx and appears on no other route.)',
+        );
+
+        // The redirect envelope must not carry the authenticated shell or a session
+        // cookie. This is the assertion that keeps the non-regression layer from
+        // becoming a licence to expose the root route.
+        //
+        // `shell_shell__` is the CSS-module class of the authenticated layout
+        // (`apps/web/src/app/(authenticated)/shell.module.css`), so it appears in
+        // the markup of ANY page rendered inside that layout and on no other
+        // route. It is used in preference to visible copy such as "Active
+        // senior": a reworded interface must not silently turn a security check
+        // into a vacuous one.
+        const SHELL_MARKER = 'shell_shell__';
+        const leaked = root.bodyText.includes(SHELL_MARKER);
+        const setsSession = /set-cookie:[^\n]*\becc_at\b/i.test(root.rawHeader);
+        check(
+          'the unauthenticated / response body carries no authenticated-shell content and no session cookie',
+          !leaked && !setsSession,
+          leaked
+            ? `the body contains "${SHELL_MARKER}" — the authenticated layout rendered for an anonymous caller`
+            : `shell-marker=absent set-cookie=${/set-cookie:/i.test(root.rawHeader) ? 'present (no ecc_at)' : 'absent'}`,
+        );
+
+        // The same contract must hold for a route that is INSIDE the
+        // authenticated layout, not only for `/`. This is what makes the shell
+        // check above falsifiable: `/` never renders the shell under any
+        // behaviour, so the marker test there cannot distinguish a working guard
+        // from a removed one. `/dashboard` does render it, so if the server-side
+        // guard in `apps/web/src/app/(authenticated)/layout.tsx` were deleted or
+        // weakened, this probe answers 200 WITH `shell_shell__` in the body and
+        // the check fails.
+        const guarded = await probe(port, '/dashboard');
+        check(
+          'an authenticated route (/dashboard) redirects an anonymous caller to /login and renders no shell',
+          guarded.status >= 300
+            && guarded.status < 400
+            && /^\/login/.test(guarded.location)
+            && !guarded.bodyText.includes(SHELL_MARKER)
+            && !/set-cookie:[^\n]*\becc_at\b/i.test(guarded.rawHeader),
+          `status=${guarded.status} location=${guarded.location || '(none)'} shell-marker=${
+            guarded.bodyText.includes(SHELL_MARKER) ? 'PRESENT (protected content rendered)' : 'absent'
+          }`,
+        );
+
+        const health = await probe(port, '/health');
+        check('/health still answers 200 (the app was not broken to close the endpoint)', health.status === 200, `status=${health.status}`);
       } finally {
         started.proc.kill('SIGTERM');
         await sleep(400);
@@ -405,7 +521,15 @@ async function startStandalone(port, stagedFixtureInfo) {
   return { ok: false, detail: `the server never became reachable on port ${port}: ${output.slice(-800)}` };
 }
 
-/** HTTP GET returning status, content-type and body length. No dependencies. */
+/**
+ * HTTP GET returning status, content-type, `Location`, the response header
+ * block and the body, decoded as latin1. No dependencies.
+ *
+ * Phase 50 reconciliation: the non-regression layer asserts a REDIRECT
+ * CONTRACT rather than a status code, so the `Location` header and the body
+ * text must be observable. `location` is read case-insensitively because the
+ * header name's casing is a server detail, not part of the contract.
+ */
 async function rawProbe(port, urlPath, headers = {}) {
   return new Promise((resolve, reject) => {
     const req = net.connect(port, '127.0.0.1', () => {
@@ -422,7 +546,8 @@ async function rawProbe(port, urlPath, headers = {}) {
       const body = sep === -1 ? Buffer.alloc(0) : buf.subarray(sep + 4);
       const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(header)?.[1] ?? 0);
       const contentType = /content-type:\s*([^\r\n;]+)/i.exec(header)?.[1]?.trim() ?? '';
-      resolve({ status, contentType, bytes: body.length });
+      const location = /(?:^|\r\n)location:\s*([^\r\n]*)/i.exec(header)?.[1]?.trim() ?? '';
+      resolve({ status, contentType, bytes: body.length, location, bodyText: body.toString('latin1'), rawHeader: header });
     });
     req.setTimeout(15_000, () => req.destroy(new Error('probe timed out')));
   });
@@ -432,7 +557,7 @@ async function probe(port, urlPath, headers = {}) {
   try {
     return await rawProbe(port, urlPath, headers);
   } catch (err) {
-    return { status: 0, contentType: '', bytes: 0, error: err.message };
+    return { status: 0, contentType: '', bytes: 0, location: '', bodyText: '', rawHeader: '', error: err.message };
   }
 }
 
@@ -445,15 +570,18 @@ function finish() {
   }
   if (failures > 0) {
     console.error(
-      `\nFAILED — ${failures} check(s): the Image Optimization endpoint is not provably unreachable, or the ` +
-        'build evidence is missing. This is the P35-1 condition. Set `images: { unoptimized: true }` in ' +
+      `\nFAILED — ${failures} check(s): the Image Optimization endpoint is not provably unreachable, the build ` +
+        'evidence is missing, or the non-regression layer found the application not serving its Phase 50 root-route ' +
+        'contract (an anonymous GET / must redirect to a live /login and must not render authenticated content; ' +
+        '/health must be 200). For the image endpoint itself, set `images: { unoptimized: true }` in ' +
         'apps/web/next.config.mjs and rebuild.\n',
     );
     process.exit(1);
   }
   console.log(
     '\nPASSED — /_next/image cannot serve an optimized image: the config sets `images.unoptimized: true`, the ' +
-      'BUILT manifest agrees, the running standalone server answers 404, and unrelated routes still work.\n',
+      'BUILT manifest agrees, the running standalone server answers 404, and the application still works (' +
+      'the anonymous root route redirects to a live /login and serves no authenticated content, and /health is 200).\n',
   );
   process.exit(0);
 }
