@@ -3,9 +3,11 @@
 import type { ReactElement, ReactNode } from 'react';
 
 /**
- * Client-side providers wrapper. Phase 1 only contains a passthrough
- * shell. Real providers (query client, auth context, i18n) are added
- * in their owning phase.
+ * Phase 50 — client providers.
+ *
+ * Deliberately minimal. Authentication state lives in an HTTP-only cookie read
+ * on the server; there is no client-side token store, and therefore no
+ * hydration mismatch to reconcile and no token available to client JavaScript.
  */
 export function AppProviders({ children }: { children: ReactNode }): ReactElement {
   return <>{children}</>;

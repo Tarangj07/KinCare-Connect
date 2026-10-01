@@ -1,0 +1,302 @@
+.shell {
+  min-height: 100vh;
+  background: var(--background);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1.5rem;
+  background: var(--brand);
+  color: #fff;
+}
+
+.brandBlock {
+  display: flex;
+  flex-direction: column;
+}
+
+.brand {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.brandSub {
+  font-size: 0.75rem;
+  opacity: 0.85;
+}
+
+.identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-left: auto;
+}
+
+.userName {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.userEmail {
+  font-size: 0.75rem;
+  opacity: 0.85;
+}
+
+.header button.secondary {
+  background: transparent;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 1.5rem;
+  align-items: start;
+  padding: 1.5rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+@media (max-width: 800px) {
+  .body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.nav {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.navHeading {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.navHeading:first-child {
+  margin-top: 0;
+}
+
+.navList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.navList a {
+  color: var(--brand);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.navList a:hover {
+  text-decoration: underline;
+}
+
+.activeSenior {
+  display: flex;
+  flex-direction: column;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f7fafc;
+  font-size: 0.9rem;
+}
+
+.role {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: capitalize;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.selector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.selector label {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.selector select {
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: #fff;
+}
+
+.unavailable {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.content {
+  min-width: 0;
+}
+
+/* ---- dashboard ---- */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin: 0 0 1rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.facts div {
+  display: flex;
+  flex-direction: column;
+}
+
+.facts dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.card h2 {
+  margin-top: 0;
+  font-size: 1.05rem;
+  color: var(--brand);
+}
+
+.plainList {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.seniorList {
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.seniorList a {
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.notAvailable {
+  margin: 0.9rem 0 0;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.error {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border-left: 3px solid var(--danger);
+  background: #fdf3f4;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.seniorLinks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.seniorLink,
+.seniorLinkActive {
+  font-size: 0.82rem;
+  text-decoration: none;
+  padding: 0.3rem 0.45rem;
+  border-radius: 6px;
+  color: var(--brand);
+}
+
+.seniorLink:hover {
+  background: #eef4f9;
+}
+
+.seniorLinkActive {
+  background: #e6eef6;
+  font-weight: 700;
+}
+
+.preferenceBox {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.preferenceBox label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.preferenceBox select {
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-right: 0.5rem;
+  background: #fff;
+}

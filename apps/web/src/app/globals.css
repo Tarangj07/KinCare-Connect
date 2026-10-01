@@ -1,15 +1,11 @@
 :root {
-  --ecc-color-primary: #0f4c81;
-  --ecc-color-primary-contrast: #ffffff;
-  --ecc-color-accent: #e08a3c;
-  --ecc-color-background: #f7f6f2;
-  --ecc-color-surface: #ffffff;
-  --ecc-color-text: #1b1b1b;
-  --ecc-color-text-muted: #4a4a4a;
-  --ecc-color-focus: #0f4c81;
-  --ecc-radius-md: 8px;
-  --ecc-radius-lg: 12px;
-  --ecc-min-touch: 48px;
+  --brand: #0f4c81;
+  --brand-dark: #0b3a63;
+  --border: #dde5ec;
+  --muted: #5a6b7b;
+  --danger: #a4262c;
+  --surface: #ffffff;
+  --background: #f4f7fa;
 }
 
 * {
@@ -20,20 +16,72 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--ecc-color-background);
-  color: var(--ecc-color-text);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-size: 18px;
+  background: var(--background);
+  color: #1b2733;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
-a {
-  color: var(--ecc-color-primary);
+/* ---- forms ---- */
+.field {
+  margin-bottom: 1rem;
 }
 
+.field label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #33475b;
+}
+
+.field input {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 1rem;
+  background: #fff;
+  color: inherit;
+}
+
+.field input:disabled {
+  background: #f2f5f8;
+}
+
+button {
+  padding: 0.6rem 1.1rem;
+  background: var(--brand);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #9db4c9;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: #fff;
+  color: var(--brand);
+  border: 1px solid var(--brand);
+}
+
+.error {
+  margin: 1rem 0 0;
+  padding: 0.6rem 0.75rem;
+  border-left: 3px solid var(--danger);
+  background: #fdf3f4;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+/* ---- accessibility ---- */
 :focus-visible {
-  outline: 3px solid var(--ecc-color-focus);
+  outline: 3px solid #7aa7d1;
   outline-offset: 2px;
 }

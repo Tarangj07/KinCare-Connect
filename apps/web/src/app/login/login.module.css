@@ -1,0 +1,31 @@
+.main {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: #f4f7fa;
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: #fff;
+  border: 1px solid #dde5ec;
+  border-radius: 12px;
+  padding: 2rem;
+  box-shadow: 0 1px 3px rgba(15, 76, 129, 0.08);
+}
+
+.title {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+  color: #0f4c81;
+}
+
+.subtitle {
+  margin: 0 0 1.5rem;
+  color: #4a4a4a;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}

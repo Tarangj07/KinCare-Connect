@@ -1,36 +1,19 @@
+import { redirect } from 'next/navigation';
 import type { ReactElement } from 'react';
 
-import Link from 'next/link';
+import { readIdentity } from '@/app/api/_session';
 
-import styles from './page.module.css';
+/**
+ * Phase 50 — entry point.
+ *
+ * A signed-in user is sent to the dashboard; an anonymous visitor is sent to
+ * sign in. The decision is made on the SERVER, so no landing markup is
+ * produced for either audience.
+ */
+export const dynamic = 'force-dynamic';
+export const metadata = { title: 'KinCare Connect' };
 
-export default function HomePage(): ReactElement {
-  return (
-    <main className={styles.main}>
-      <div className={styles.card}>
-        <p className={styles.eyebrow}>Phase 1 · Foundation</p>
-        <h1 className={styles.title}>Elderly Care Coordination</h1>
-        <p className={styles.subtitle}>
-          A secure family and caregiver coordination platform. Phase 15 web dashboards are now available.
-        </p>
-        <ul className={styles.list}>
-          <li>
-            Read the architecture in <code>docs/ARCHITECTURE.md</code>.
-          </li>
-          <li>
-            Follow the plan in <code>docs/PROJECT_PLAN.md</code>.
-          </li>
-          <li>
-            Review the threat model in <code>docs/THREAT_MODEL.md</code>.
-          </li>
-        </ul>
-        <Link className={styles.cta} href="/dashboard">
-          Open Dashboard
-        </Link>
-        <Link className={styles.cta} href="/health" style={{ marginTop: '1rem', background: '#e08a3c' }}>
-          Check API health
-        </Link>
-      </div>
-    </main>
-  );
+export default async function HomePage(): Promise<ReactElement> {
+  const user = await readIdentity();
+  redirect(user ? '/dashboard' : '/login');
 }

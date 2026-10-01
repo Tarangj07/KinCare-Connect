@@ -6,9 +6,9 @@ import { AppProviders } from './providers';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Elderly Care Coordination',
+  title: 'KinCare Connect',
   description:
-    'A secure family and caregiver coordination platform for elderly relatives. Phase 15 — web dashboards.',
+    'Family and caregiver coordination for elderly relatives. Sign in to see the seniors you are authorized to help.',
 };
 
 export const viewport: Viewport = {
