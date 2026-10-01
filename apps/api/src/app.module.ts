@@ -5,6 +5,9 @@ import { ACCESS_TOKEN_TTL_SECONDS, resolveJwtAccessSecret } from './config/secur
 import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './database/prisma.module';
 import { AppointmentModule } from './modules/appointments/appointment.module';
+// Phase 49: the senior access foundation — the only legitimate path to a
+// SeniorProfile, a CareCircle and a CareCircleMember.
+import { CareCircleModule } from './modules/care-circle/care-circle.module';
 import { NotificationModule } from './modules/notifications/notification.module';
 import { FeedModule } from './modules/feed/feed.module';
 import { HealthModule } from './modules/health/health.module';
@@ -33,6 +36,7 @@ import { StorageModule } from './storage/storage.module';
     StorageModule,
     DocumentsModule,
     EmergencyModule,
+    CareCircleModule,
   ],
 })
 export class AppModule {}
