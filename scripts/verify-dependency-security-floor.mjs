@@ -93,55 +93,117 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const lockfilePath = path.join(repoRoot, 'pnpm-lock.yaml');
+/** Phase 37 (R36-03): the floors are policy, declared once, outside this script. */
+const POLICY_REL = 'security/dependency-security-floor.json';
+const policyPath = path.join(repoRoot, POLICY_REL);
 const asJson = process.argv.includes('--json');
 
 /**
- * The floors. Each entry names the majors it governs and the minimum version
- * within them.
+ * Phase 37 (R36-03). The floors are POLICY, so they live in a data file with
+ * no executable behaviour rather than as a constant in the script that enforces
+ * them.
  *
- * A floor is recorded here, in prose that states the advisory it came from,
- * rather than as a bare number. `minimum: '1.1.21'` with no explanation is a
- * version pin that the next reader cannot evaluate; the `why` is what makes
- * lowering it a decision someone has to argue for rather than a typo someone
- * can make.
+ * The independent Phase 36 review demonstrated the difference concretely. While
+ * `FLOORS` was declared below, lowering a floor was a one-line edit to this
+ * file — the control and its configuration were the same editable object — and
+ * every dependency gate stayed green with moderate advisories 1240100 and
+ * 1240101 back in the resolved graph. A gate cannot police a policy that lives
+ * inside itself.
  *
- * `majors` is what makes a major bump a REVIEW rather than a failure. Guessing
- * at a floor for an unfamiliar major would either produce a false failure (a
- * new major legitimately below the old floor's number) or, worse, a false pass
- * (a new major that is itself vulnerable). Reporting REVIEW forces a human to
- * look, which is the honest answer for something this script cannot know.
+ * The authoritative values are now in `security/dependency-security-floor.json`,
+ * which states, per floor: the package, the majors it governs, the minimum
+ * version, the advisories it closes and the version each is fixed in, and the
+ * reasoning in prose. That last part is deliberate — a bare `1.1.21` is a pin
+ * the next reader cannot evaluate; the advisory record is what makes lowering
+ * the floor an argument someone has to make rather than a number someone can
+ * retype.
+ *
+ * `scripts/verify-dependency-floor-policy.mjs` is the independent contract: it
+ * asserts each floor is at least the version that fixes every advisory it
+ * claims to close, and that it agrees with the `pnpm-workspace.yaml` override
+ * that actually enforces the remediation. This file remains the authority on
+ * the RESOLVED GRAPH; that gate is the authority on whether the POLICY is still
+ * defensible. Neither is asked to do the other's job.
+ *
+ * Every failure mode here is a FAILURE, never a silent empty list: a missing
+ * file, malformed JSON, a non-array `floors`, a non-literal `minimum`, or a
+ * floor whose `package`/`majors` cannot be read all exit 1. A policy this
+ * script cannot read is not a policy it can certify.
+ *
+ * `majors` remains what makes a major bump a REVIEW rather than a failure.
+ * Guessing a floor for an unfamiliar major would either produce a false failure
+ * (a new major legitimately below the old floor's number) or, worse, a false
+ * pass (a new major that is itself vulnerable). Reporting REVIEW forces a human
+ * to look, which is the honest answer for something this script cannot know.
  */
-const FLOORS = [
-  {
-    package: 'brace-expansion',
-    majors: ['1'],
-    minimum: '1.1.21',
-    why:
-      'advisories 1240108 (high, <1.1.19), 1240104 (high, <1.1.20) and 1240100 (MODERATE, <1.1.21). ' +
-      'Phase 33 set this to 1.1.21 rather than the high-severity floor of 1.1.19/1.1.20 precisely because ' +
-      '1240100 is only fixed at 1.1.21 — and Phase 35 demonstrated that every gate passes with 1240100 present.',
-    reachedVia: 'minimatch@3 (requests ^1.1.7) — via eslint, @nestjs/cli, @expo/cli',
-  },
-  {
-    package: 'brace-expansion',
-    majors: ['2'],
-    minimum: '2.1.7',
-    why:
-      'advisories 1240109 (high, <2.1.5), 1240105 (high, <2.1.6) and 1240101 (MODERATE, >=2.0.0 <2.1.7). ' +
-      'Same structure as the 1.x line: the moderate advisory sets the binding floor.',
-    reachedVia: 'minimatch@9 (requests ^2.0.2) — via glob',
-  },
-  {
-    package: 'undici',
-    majors: ['6'],
-    minimum: '6.28.1',
-    why:
-      'advisories 1240042 (high, >=6.7.0 <6.28.1), 1239934 (moderate) and 1240039 (low). ' +
-      'This floor is already enforced by the critical/high triage gate, so it is a defence in depth against ' +
-      'that gate being narrowed rather than a gap it closes today.',
-    reachedVia: '@remix-run/node (requests ^6.21.2) — via @expo/server -> expo-router -> @ecc/mobile',
-  },
-];
+function loadFloors() {
+  if (!existsSync(policyPath)) {
+    console.error(
+      `FAILED — ${POLICY_REL} is missing. The dependency security floor is policy and lives in that file; a\n` +
+        'control cannot certify a policy it cannot read. This gate fails closed rather than assuming no floors.\n',
+    );
+    process.exit(1);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(policyPath, 'utf8'));
+  } catch (err) {
+    console.error(`FAILED — ${POLICY_REL} is not parseable JSON: ${err.message}\n`);
+    process.exit(1);
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || !Array.isArray(parsed.floors)) {
+    console.error(
+      `FAILED — ${POLICY_REL} does not declare a \`floors\` array. Refusing to assert against an unreadable policy.\n`,
+    );
+    process.exit(1);
+  }
+  if (parsed.floors.length === 0) {
+    console.error(
+      `FAILED — ${POLICY_REL} declares zero floors. An empty list would make this gate pass while asserting\n` +
+        'nothing, which is the R36-03 defect in a different costume. Fail closed.\n',
+    );
+    process.exit(1);
+  }
+
+  return parsed.floors.map((floor, i) => {
+    const at = (field) => `\`${POLICY_REL}\` floors[${i}].${field}`;
+    if (typeof floor !== 'object' || floor === null || Array.isArray(floor)) {
+      console.error(`FAILED — ${at('(entry)')} is not an object.\n`);
+      process.exit(1);
+    }
+    if (typeof floor.package !== 'string' || floor.package.trim() === '') {
+      console.error(`FAILED — ${at('package')} is not a non-empty string: ${JSON.stringify(floor.package)}\n`);
+      process.exit(1);
+    }
+    if (!Array.isArray(floor.majors) || floor.majors.length === 0) {
+      console.error(
+        `FAILED — ${at('majors')} is not a non-empty array: ${JSON.stringify(floor.majors)}. A floor that governs no\n` +
+          '        major would skip every instance of the package and silently assert nothing.\n',
+      );
+      process.exit(1);
+    }
+    // The security value itself: a computed, non-literal or malformed minimum
+    // is refused rather than coerced.
+    if (typeof floor.minimum !== 'string' || !/^\d+(\.\d+)+$/.test(floor.minimum)) {
+      console.error(
+        `FAILED — ${at('minimum')} is not a literal dotted version: ${JSON.stringify(floor.minimum)}. A gate must not\n` +
+          '        certify a threshold it cannot read.\n',
+      );
+      process.exit(1);
+    }
+    return {
+      package: floor.package,
+      majors: floor.majors.map(String),
+      minimum: floor.minimum,
+      why: typeof floor.why === 'string' ? floor.why : '(no rationale recorded)',
+      reachedVia: typeof floor.reachedVia === 'string' ? floor.reachedVia : '(no reachability path recorded)',
+    };
+  });
+}
+
+const FLOORS = loadFloors();
 
 // ---------------------------------------------------------------------------
 // Parse the lockfile with the `yaml` package already in the graph

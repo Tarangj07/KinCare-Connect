@@ -412,6 +412,67 @@ const REQUIRED_GATES = [
     target: { kind: 'file', file: 'scripts/mutate-dependency-security-floor.mjs' },
     exactCommand: 'node scripts/mutate-dependency-security-floor.mjs',
   },
+
+  // --- Phase 37 gates (R36-03) -------------------------------------------
+  //
+  // Phase 36 left R36-03 open: the floor gate's configuration was editable in
+  // the same act as the gate. Phase 37 moves the floors into
+  // security/dependency-security-floor.json and adds an independent contract
+  // that asserts each floor is justified by the advisories it claims to close
+  // and agrees with the pnpm-workspace.yaml override. Both new artefacts are
+  // listed here so neither can be implemented, read, and then quietly never
+  // run — the exact failure P35-2 recorded for `untrackedTargetProblem()`.
+  {
+    id: 'p37-floor-policy',
+    gate: 'verify-dependency-floor-policy.mjs',
+    why: 'Phase 37 R36-03 — the dependency security floor is policy: this asserts each floor is at least the version fixing every advisory it closes, and agrees with the override that enforces it, so lowering the floor cannot be a one-line edit to the gate that reads it',
+    target: { kind: 'file', file: 'scripts/verify-dependency-floor-policy.mjs' },
+    exactCommand: 'node scripts/verify-dependency-floor-policy.mjs',
+  },
+  {
+    id: 'p37-floor-policy-mutate',
+    gate: 'mutate-dependency-floor-policy.mjs',
+    why: 'Phase 37 R36-03 — proof that a lowered, deleted, malformed or computed floor is detected, that the CI registration above is load-bearing, and that a legitimate remediation is not punished',
+    target: { kind: 'file', file: 'scripts/mutate-dependency-floor-policy.mjs' },
+    exactCommand: 'node scripts/mutate-dependency-floor-policy.mjs',
+  },
+
+  // --- Phase 39 gates (F-39-01), hardened in Phase 41 (F-40-01/F-40-02) ---
+  //
+  // Found in the Phase 39 pre-flight: `pnpm audit` is invoked with
+  // `--audit-level=high`, so the JSON is truncated before triage reads it, and
+  // triage then filters to critical-or-high. 44 of 92 advisories reached no
+  // gate — including 1240100 and 1240101, the moderate advisories Phase 33
+  // remediated, so the vulnerabilities the floor exists to exclude were
+  // invisible to the machinery meant to notice their return.
+  //
+  // Phase 41 hardened the first of these without changing its command or its
+  // target: the gate now reconciles the advisory records against pnpm's registry
+  // severity census, which a severity threshold does not touch, so "unfiltered"
+  // is a reconciled fact rather than an inference from a non-empty report. The
+  // Phase 40 review proved the un-hardened gate accepted a `--audit-level=moderate`
+  // report while claiming it had observed the full set.
+  //
+  // These two entries exist so the closing control cannot itself be implemented,
+  // read, and then quietly never run: the Phase 28 F-2 / Phase 35 P35-2 defect
+  // class, caught once already in this repository.
+  {
+    id: 'p39-advisory-visibility',
+    gate: 'verify-dependency-advisory-visibility.mjs',
+    why: 'Phase 39 F-39-01 + Phase 41 F-40-01 — the advisory records are reconciled against the registry severity census so the report is proven UNFILTERED rather than merely non-empty, and no advisory may exist against a package the security floor claims to remediate, at any severity',
+    target: { kind: 'file', file: 'scripts/verify-dependency-advisory-visibility.mjs' },
+    // Exact, and deliberately WITHOUT `--audit-file`: that flag substitutes a
+    // saved report, so a CI step using it would assert against a fixture instead
+    // of the live dependency graph, which is the opposite of what this gate is for.
+    exactCommand: 'node scripts/verify-dependency-advisory-visibility.mjs',
+  },
+  {
+    id: 'p39-advisory-visibility-mutate',
+    gate: 'mutate-dependency-advisory-visibility.mjs',
+    why: 'Phase 39 F-39-01 + Phase 41 F-40-02 — proof that a moderate, low or critical advisory against a floored package is detected, that GENUINE severity-filtered reports are rejected by name, that an empty or census-less report fails closed, that seven mutations of the gate\'s own source each demonstrably weaken it, and that a moderate advisory against a NON-floored package is not treated as a floor failure',
+    target: { kind: 'file', file: 'scripts/mutate-dependency-advisory-visibility.mjs' },
+    exactCommand: 'node scripts/mutate-dependency-advisory-visibility.mjs',
+  },
 ];
 
 /**
@@ -909,6 +970,10 @@ const REQUIRED_GATE_IDS = [
   // Phase 36 (P35-1, P34-1).
   'p36-image-optimizer', 'p36-image-optimizer-mutate',
   'p36-dependency-floor', 'p36-dependency-floor-mutate',
+  // Phase 37 (R36-03).
+  'p37-floor-policy', 'p37-floor-policy-mutate',
+  // Phase 39 (F-39-01).
+  'p39-advisory-visibility', 'p39-advisory-visibility-mutate',
 ];
 if (REQUIRED_GATES.length !== REQUIRED_GATE_IDS.length) {
   problems.push(

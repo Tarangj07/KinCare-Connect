@@ -141,6 +141,103 @@ jobs:
       - name: Supply chain — the dependency security floor is enforced (Phase 36 P34-1)
         run: node scripts/verify-dependency-security-floor.mjs
 
+      # --- Phase 37 (R36-03): the floor policy is tamper-evident -----------
+      #
+      # The gate above reads its floors from
+      # `security/dependency-security-floor.json`. Phase 37 moved them there
+      # out of the gate's own source, because a control whose configuration
+      # lives inside it cannot police that configuration: the Phase 36 review
+      # demonstrated that editing one line of the gate lowered the floor while
+      # every dependency gate stayed green and moderate advisories 1240100 /
+      # 1240101 sat back in the resolved graph.
+      #
+      # This step is the independent contract that closes that gap. It asserts
+      # each declared floor is at least the version that fixes every advisory
+      # the floor claims to close, and that it agrees with the `pnpm-workspace.yaml`
+      # override that actually enforces the remediation — a cross-artifact
+      # check, not a file compared with itself. It needs no network and runs
+      # before any install, so it cannot be skipped by an install failure.
+      #
+      # It suppresses nothing: no audit ignore, no allow-list, no severity
+      # change, no continue-on-error. It adds a check.
+      - name: Supply chain — the dependency floor policy cannot be weakened (Phase 37 R36-03)
+        run: node scripts/verify-dependency-floor-policy.mjs
+
+      # --- Phase 39 (F-39-01): advisories the pipeline does not currently see
+      #
+      # Found in the Phase 39 pre-flight, not by reading any report. The pipeline
+      # filters to critical/high TWICE: `pnpm audit` is invoked with
+      # `--audit-level=high`, so the JSON is already truncated before triage
+      # reads it, and triage then filters to critical-or-high. Measured:
+      #
+      #     pnpm audit --json                       -> 92 advisories
+      #     pnpm audit --audit-level=high --json    -> 48 advisories
+      #     triage-vulnerabilities.mjs              -> 48 rows (critical/high)
+      #
+      # So 36 moderate and 8 low advisories reach NO gate. This is not
+      # theoretical for this repository: the advisories Phase 33 remediated
+      # (1240100, 1240101) are BOTH moderate, so the exact vulnerabilities the
+      # security floor exists to exclude were invisible to the machinery meant
+      # to notice their return. In the reproduced R36-03 graph those two
+      # advisories appear in no gate output and all six dependency gates exit 0.
+      #
+      # This step reads the UNTRUNCATED advisory set and asserts one property: no
+      # advisory may exist against a package the floor policy claims to
+      # remediate, at ANY severity. It does not adjudicate the advisories outside
+      # any floor — remediating those needs dependency upgrades (including next
+      # 14.2.35 -> 15.5.x) that require a lockfile change and an authorization this
+      # change does not carry. They are counted and reported instead, so the
+      # remaining gap is on the record rather than out of sight.
+      #
+      # It suppresses nothing: no audit ignore, no allow-list, no severity
+      # change, no continue-on-error. It adds a check.
+      #
+      # --- Phase 41 (F-40-01): "unfiltered" is now PROVEN, not asserted -------
+      #
+      # Phase 40's independent review found this step would PASS while claiming
+      # otherwise. Non-emptiness is not completeness: a `--audit-level=moderate`
+      # report still carries 84 of this repository's 92 advisories, so it is
+      # comfortably non-empty and still not the full set. Reproduced before the
+      # fix — the gate exited 0 on that report and printed "the full advisory set
+      # was observed".
+      #
+      # The step now reconciles the advisory RECORDS against `metadata.vulnerabilities`,
+      # the registry severity CENSUS that pnpm emits alongside them and that a
+      # severity threshold does NOT touch. Measured on this repository:
+      #
+      #     pnpm audit --json                  -> 92 records; census 92   AGREE
+      #     pnpm audit --audit-level=moderate  -> 84 records; census 92   DISAGREE -> rejected
+      #     pnpm audit --audit-level=high      -> 48 records; census 92   DISAGREE -> rejected
+      #
+      # This is a structural property of the report, not a remembered count, so
+      # the gate does not need editing when the registry publishes an advisory —
+      # and there is therefore no number to loosen in order to make it pass.
+      #
+      # --- Phase 43 (P42-01): the census is not a census of the repository ---
+      #
+      # The Phase 42 independent review reproduced a silent pass that the
+      # census cannot see. `pnpm audit --dev` and `--prod` do not filter by
+      # severity; they reduce the set of PACKAGES submitted to the registry, so
+      # the census shrinks in the same proportion and the report stays internally
+      # consistent. With the prod-only `undici` floor package reverted to a
+      # vulnerable version, `--dev` returned a report in which that package did
+      # not appear at all, and this step passed while stating the set had been
+      # proven unfiltered.
+      #
+      # The census therefore evidences the population pnpm was SUBMITTED, not
+      # the population that exists. This step's command is deliberately unchanged
+      # — the invariant is enforced inside the gate, which now
+      #
+      #   1. holds the audit invocation to an exact canonical form (an ALLOWLIST,
+      #      not a denylist, so an unrecognised future flag fails closed), and
+      #   2. compares `metadata.totalDependencies` against the number of packages
+      #      pnpm-lock.yaml actually resolves, in every mode including --audit-file.
+      #
+      # Two independent witnesses, because the Phase 42 finding is precisely
+      # that neither kind of check is sufficient alone.
+      - name: Supply chain — advisories the pipeline filters out are observed, and proven unfiltered (Phase 39 F-39-01, Phase 41 F-40-01, Phase 43 P42-01)
+        run: node scripts/verify-dependency-advisory-visibility.mjs
+
       - name: API unit tests
         run: pnpm --filter @ecc/api test
 
@@ -548,6 +645,44 @@ jobs:
 
       - name: Mutation — the dependency floor detects a lowered remediation (Phase 36)
         run: node scripts/mutate-dependency-security-floor.mjs
+
+      # --- Phase 37 (R36-03): the floor-policy protection -------------------
+      #
+      # Mutation-testing the protection is what makes it load-bearing rather
+      # than intended. It covers the lowering of each floor, a deleted floor, a
+      # malformed and a computed minimum, a deleted advisory record, the removal
+      # of the CI registration above, and the coordinated edit that lowers the
+      # floor and its evidence together — with positive controls proving that a
+      # legitimate remediation (raising a floor) and a pure reformat are not
+      # punished.
+      - name: Mutation — the floor policy cannot be weakened (Phase 37 R36-03)
+        run: node scripts/mutate-dependency-floor-policy.mjs
+
+      # --- Phase 39 (F-39-01) + Phase 41 (F-40-02): the visibility control --
+      #
+      # Mutation-testing the visibility control proves the floor is enforced
+      # against the FULL advisory set, not only the part triage happens to see:
+      # a moderate, a low and a critical advisory against either floored
+      # package, an empty or malformed report, an emptied floor policy, and the
+      # removal of the CI step above — with a positive control proving that a
+      # moderate advisory against a package carrying NO floor is reported rather
+      # than treated as a floor failure.
+      #
+      # Phase 41 adds what Phase 40 found missing. Phase 39's mutants varied the
+      # advisory FIXTURE, the policy and the workflow; none wrote the gate's own
+      # source, so every line that decides the property under test was untested.
+      # The M41-SRC-* mutants now rewrite the control itself and prove each of
+      # those lines load-bearing, and the M41-FILTER-* mutants feed GENUINE
+      # `pnpm audit --audit-level=...` reports captured from the real package
+      # manager rather than hand-written stand-ins.
+      #
+      # Note the two polarities, which are deliberately opposite and are reported
+      # separately: a source mutant that WEAKENS the control must exit 0 (that is
+      # the proof the line matters), while an adversarial-state mutant must be
+      # rejected (exit 1). A harness that scored both the same way would report a
+      # working control as unproven.
+      - name: Mutation — advisories outside the triage threshold still fail a broken floor (Phase 39 F-39-01, Phase 41 F-40-02)
+        run: node scripts/mutate-dependency-advisory-visibility.mjs
 
       # --- Phase 29: the Phase 28 DB-suite driver ---------------------------
       #

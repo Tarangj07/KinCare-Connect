@@ -1,0 +1,43 @@
+{
+  "policyId": "dependency-security-floor",
+  "policyVersion": 1,
+  "description": "The single authoritative statement of the minimum acceptable version of every package this repository has deliberately remediated. Phase 37 (R36-03): these values used to live only inside scripts/verify-dependency-security-floor.mjs, so the control and its configuration were the same editable object — lowering a floor was a one-line edit to the very file meant to enforce it, and every gate stayed green while moderate advisories 1240100/1240101 sat back in the graph. The floor now lives here, in a data file with no executable behaviour, consumed by both scripts/verify-dependency-security-floor.mjs and scripts/verify-dependency-floor-policy.mjs.",
+  "floors": [
+    {
+      "package": "brace-expansion",
+      "majors": ["1"],
+      "minimum": "1.1.21",
+      "advisories": [
+        { "id": "1240108", "severity": "high", "patchedIn": "1.1.19" },
+        { "id": "1240104", "severity": "high", "patchedIn": "1.1.20" },
+        { "id": "1240100", "severity": "moderate", "patchedIn": "1.1.21" }
+      ],
+      "why": "advisories 1240108 (high, <1.1.19), 1240104 (high, <1.1.20) and 1240100 (MODERATE, <1.1.21). Phase 33 set this to 1.1.21 rather than the high-severity floor of 1.1.19/1.1.20 precisely because 1240100 is only fixed at 1.1.21 — and the Phase 35 review demonstrated that every gate passes with 1240100 present.",
+      "reachedVia": "minimatch@3 (requests ^1.1.7) — via eslint, @nestjs/cli, @expo/cli"
+    },
+    {
+      "package": "brace-expansion",
+      "majors": ["2"],
+      "minimum": "2.1.7",
+      "advisories": [
+        { "id": "1240109", "severity": "high", "patchedIn": "2.1.5" },
+        { "id": "1240105", "severity": "high", "patchedIn": "2.1.6" },
+        { "id": "1240101", "severity": "moderate", "patchedIn": "2.1.7" }
+      ],
+      "why": "advisories 1240109 (high, <2.1.5), 1240105 (high, <2.1.6) and 1240101 (MODERATE, >=2.0.0 <2.1.7). Same structure as the 1.x line: the moderate advisory sets the binding floor.",
+      "reachedVia": "minimatch@9 (requests ^2.0.2) — via glob"
+    },
+    {
+      "package": "undici",
+      "majors": ["6"],
+      "minimum": "6.28.1",
+      "advisories": [
+        { "id": "1240042", "severity": "high", "patchedIn": "6.28.1" },
+        { "id": "1239934", "severity": "moderate", "patchedIn": "6.28.1" },
+        { "id": "1240039", "severity": "low", "patchedIn": "6.28.1" }
+      ],
+      "why": "advisories 1240042 (high, >=6.7.0 <6.28.1), 1239934 (moderate) and 1240039 (low). This floor is already enforced by the critical/high triage gate, so it is a defence in depth against that gate being narrowed rather than a gap it closes today.",
+      "reachedVia": "@remix-run/node (requests ^6.21.2) — via @expo/server -> expo-router -> @ecc/mobile"
+    }
+  ]
+}

@@ -55,7 +55,7 @@
  * Usage:  node scripts/mutate-dependency-security-floor.mjs [--only D1,D2] [--keep]
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -66,6 +66,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const gateRel = path.join('scripts', 'verify-dependency-security-floor.mjs');
 const lockRel = 'pnpm-lock.yaml';
 const workspaceRel = 'pnpm-workspace.yaml';
+/** Phase 37 (R36-03): the floors live in this policy file, not in the gate. */
+const policyRel = 'security/dependency-security-floor.json';
 
 const only = process.argv.includes('--only')
   ? new Set((process.argv[process.argv.indexOf('--only') + 1] ?? '').split(',').map((s) => s.trim()))
@@ -102,6 +104,13 @@ function makeMirror() {
   cpSync(path.join(repoRoot, 'scripts'), path.join(root, 'scripts'), { recursive: true });
   cpSync(path.join(repoRoot, lockRel), path.join(root, lockRel));
   cpSync(path.join(repoRoot, workspaceRel), path.join(root, workspaceRel));
+  // Phase 37 (R36-03). The floors moved out of the gate into a policy file, so
+  // a mirror without it is an incomplete tree: the gate fails closed on a
+  // missing policy, and every mutant would score as "detected" for a setup
+  // reason. This is the same class of defect this harness already rejects
+  // mutants for, caught here by running the unmutated CONTROL.
+  mkdirSync(path.join(root, 'security'), { recursive: true });
+  cpSync(path.join(repoRoot, policyRel), path.join(root, policyRel));
   symlinkSync(path.join(repoRoot, 'node_modules'), path.join(root, 'node_modules'), 'dir');
   return root;
 }
@@ -165,13 +174,30 @@ function setOverrideTarget(root, pkgName, toVersion) {
   return `override declaration for ${pkgName} -> ${toVersion} (lockfile left untouched)`;
 }
 
-/** Edit the FLOORS array inside the gate's own source. */
+/**
+ * Phase 37 (R36-03). Edit the POLICY file, not the gate source.
+ *
+ * The floors moved out of `verify-dependency-security-floor.mjs` into
+ * `security/dependency-security-floor.json`, because a control that stores its
+ * own configuration cannot police that configuration — the reviewer showed that
+ * editing one line of the gate lowered the floor with every other gate green.
+ * D11 and D12 therefore mutate the policy, which is where the defect now lives.
+ */
 function editFloors(root, fn) {
-  const src = readMirror(root, gateRel);
+  const src = readMirror(root, policyRel);
   const next = fn(src);
-  if (next === src) throw new Error('the FLOORS edit changed nothing; the mutant would be a no-op');
-  writeMirror(root, gateRel, next);
+  if (next === src) throw new Error('the floors edit changed nothing; the mutant would be a no-op');
+  writeMirror(root, policyRel, next);
   return next;
+}
+
+/** Parse and re-serialise the policy JSON so an edit stays well-formed. */
+function editPolicyJson(root, fn) {
+  const policy = JSON.parse(readMirror(root, policyRel));
+  const next = fn(policy);
+  const text = `${JSON.stringify(next, null, 2)}\n`;
+  if (text === readMirror(root, policyRel)) throw new Error('the policy edit changed nothing; the mutant would be a no-op');
+  writeMirror(root, policyRel, text);
 }
 
 function runGate(root) {
@@ -373,18 +399,26 @@ const MUTANTS = [
   // --- the control losing its teeth --------------------------------------
   {
     id: 'D11',
-    label: 'the FLOORS list is emptied',
+    label: 'the floor policy is emptied',
     // A contract that can be silently emptied makes every check vacuous —
     // exactly the "green that means nothing" outcome `verify-ci-parity.mjs`
     // already guards against for its own REQUIRED_GATES with a size check.
-    // The floor control has no such guard, so this mutant proves the harness
-    // can see the difference rather than proving the gate would catch it.
-    expected: 'pass',
+    //
+    // PHASE 37 CHANGES THIS MUTANT'S MEANING, and the change is the point.
+    // When the floors lived in the gate source, emptying them was tolerated
+    // (expected: 'pass'), because nothing could detect it — that unmitigated
+    // gap IS R36-03. Now the floors live in a policy file that is validated
+    // for being non-empty before anything is asserted, so the same mutation is
+    // a FAILURE. The expectation inverted because the control improved, and the
+    // mutant is retained precisely so that inversion cannot silently regress.
+    expected: 'refuse',
+    mustMention: ['zero floors', 'R36-03'],
     apply(root) {
-      editFloors(root, (src) =>
-        src.replace(/const FLOORS = \[[\s\S]*?\n\];/, 'const FLOORS = [];'),
-      );
-      return 'emptied the FLOORS array in the gate source';
+      editPolicyJson(root, (p) => {
+        p.floors = [];
+        return p;
+      });
+      return 'emptied the `floors` array in the policy file';
     },
   },
   {
@@ -399,7 +433,10 @@ const MUTANTS = [
     expected: 'fail',
     mustMention: ['1.1.99', 'BELOW'],
     apply(root) {
-      editFloors(root, (src) => src.replace("minimum: '1.1.21',", "minimum: '1.1.99',"));
+      editPolicyJson(root, (p) => {
+        p.floors[0].minimum = '1.1.99';
+        return p;
+      });
       return "raised the brace-expansion 1.x floor to 1.1.99, above every version in the graph";
     },
   },
@@ -410,6 +447,7 @@ const preRun = {
   gate: readFileSync(path.join(repoRoot, gateRel), 'utf8'),
   lock: readFileSync(path.join(repoRoot, lockRel), 'utf8'),
   workspace: readFileSync(path.join(repoRoot, workspaceRel), 'utf8'),
+  policy: readFileSync(path.join(repoRoot, policyRel), 'utf8'),
 };
 
 let failures = 0;
@@ -446,11 +484,16 @@ for (const m of MUTANTS) {
     continue;
   }
 
-  // The edit must have changed something.
+  // The edit must have changed something. Phase 37: the policy file is one of
+  // the three artifacts a mutant may legitimately change (lockfile, overrides,
+  // policy), so it is part of the change signal. Without this, D11 and D12 —
+  // which now edit the policy — would be scored as no-ops and their coverage
+  // would be silently discarded.
   const changed =
     readFileSync(path.join(root, lockRel), 'utf8') !== preRun.lock ||
     readFileSync(path.join(root, workspaceRel), 'utf8') !== preRun.workspace ||
-    readFileSync(path.join(root, gateRel), 'utf8') !== preRun.gate;
+    readFileSync(path.join(root, gateRel), 'utf8') !== preRun.gate ||
+    readFileSync(path.join(root, policyRel), 'utf8') !== preRun.policy;
   if (!changed) {
     log('      FAIL  the mutant did not change the mirror. Its result would be meaningless.');
     failures += 1;
@@ -472,7 +515,7 @@ for (const m of MUTANTS) {
   const text = res.text;
   const verdicts = res.results.map((r) => r.verdict);
 
-  if (m.expected === 'fail') {
+  if (m.expected === 'fail' || m.expected === 'refuse') {
     if (res.status === 0) {
       log('      FAIL  NOT DETECTED (exit=0). The floor control claims to enforce this floor and does not.');
       failures += 1;
@@ -486,6 +529,19 @@ for (const m of MUTANTS) {
       log('            a Phase 34 result unusable (a MODULE_NOT_FOUND in an incomplete mirror).');
       log(`            raw output: ${text.trim().slice(-600)}`);
       failures += 1;
+      continue;
+    }
+    // Phase 37. A `refuse` mutant is one the gate must REJECT STRUCTURALLY —
+    // before it evaluates anything — rather than one that produces a BREACH
+    // verdict against a readable policy. An empty or malformed policy is
+    // exactly that case: there is nothing to compare, so the only correct
+    // behaviour is to fail closed without a verdict. Requiring a BREACH here
+    // would have scored the correct behaviour as an unrelated failure, and
+    // "fixing" the gate to emit one would have meant asserting against a policy
+    // that has no floors in it.
+    if (m.expected === 'refuse') {
+      log(`        -> DETECTED (exit=${res.status}) by refusing to evaluate: the policy is not certifiable`);
+      log('           (no verdict can be produced from an empty policy; failing closed IS the assertion)');
       continue;
     }
     if (!res.breached.length) {
@@ -550,6 +606,7 @@ for (const [label, file, before] of [
   ['scripts/verify-dependency-security-floor.mjs', gateRel, preRun.gate],
   ['pnpm-lock.yaml', lockRel, preRun.lock],
   ['pnpm-workspace.yaml', workspaceRel, preRun.workspace],
+  ['security/dependency-security-floor.json', policyRel, preRun.policy],
 ]) {
   const after = readFileSync(path.join(repoRoot, file), 'utf8');
   if (after === before) {
