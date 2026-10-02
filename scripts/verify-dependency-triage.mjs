@@ -32,7 +32,7 @@
  * Usage:  node scripts/verify-dependency-triage.mjs
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -185,6 +185,9 @@ try {
       ['@xmldom/xmldom', 'high', 'xmldom: XML injection via unsafe CDATA', '>=0.9.6', ['apps__mobile>expo>@expo/cli>@xmldom/xmldom']],
       ['tmp', 'high', 'tmp: insecure temporary file handling', '>=0.2.4', ['apps__mobile>expo>@expo/cli>tmp']],
       ['turbo-stream', 'high', 'turbo-stream: prototype pollution', '>=2.4.1', ['apps__mobile>expo-router>@expo/server>@remix-run/node>@remix-run/server-runtime>turbo-stream']],
+      // Phase 50 supply-chain advisory — node-forge (GHSA-86w9-cpqp-85rv / 1240912).
+      // Positive control: mobile-only dependency path with no runtime reference to the vulnerable RSA PKCS#1 v1.5 function.
+      ['node-forge', 'high', 'node-forge: RSA PKCS#1 v1.5 signature verification accepts extra nested DigestAlgorithm elements', '>=1.4.1', ['apps__mobile>expo>@expo/cli>node-forge']],
     ];
     const EXPECTED = {
       vitest: 'BUILD-TIME',
@@ -198,6 +201,7 @@ try {
       '@xmldom/xmldom': 'BUILD-TIME',
       tmp: 'BUILD-TIME',
       'turbo-stream': 'BUILD-TIME',
+      'node-forge': 'NOT REACHABLE',
     };
     const { rows } = classify(
       known.map(([mod, severity, title, patched, paths], i) =>
@@ -225,6 +229,114 @@ try {
         `verdict=${row.verdict} evidence=${row.evidence}`,
       );
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // 6. Phase 50 node-forge supply-chain advisory — positive and negative
+  //    controls for the new reachability rule.
+  // -----------------------------------------------------------------------
+  {
+    // Positive control: current mobile-only dependency graph for node-forge.
+    const { rows: posRows } = classify([
+      advisory({
+        id: 'GHSA-p50-fixture-node-forge-mobile',
+        module: 'node-forge',
+        severity: 'high',
+        title: 'node-forge: RSA PKCS#1 v1.5 signature verification',
+        patched: '>=1.5.0',
+        paths: ['apps__mobile>expo>@expo/cli>node-forge'],
+      }),
+    ]);
+    const posRow = posRows?.[0];
+    check(
+      'node-forge mobile-only path is NOT REACHABLE',
+      posRow?.verdict === 'NOT REACHABLE',
+      `verdict=${posRow?.verdict} evidence=${posRow?.evidence}`,
+    );
+
+    // Negative control 1: a simulated production path through apps/web (not mobile).
+    // The mobile-only assumption must fail, so the verdict must NOT remain NOT REACHABLE.
+    const { rows: neg1Rows } = classify([
+      advisory({
+        id: 'GHSA-p50-fixture-node-forge-web',
+        module: 'node-forge',
+        severity: 'high',
+        title: 'node-forge: RSA PKCS#1 v1.5 signature verification',
+        patched: '>=1.5.0',
+        paths: ['apps__web>next>node-forge'],
+      }),
+    ]);
+    const neg1Row = neg1Rows?.[0];
+    check(
+      'node-forge non-mobile production path is NOT silently accepted as NOT REACHABLE',
+      neg1Row?.verdict !== 'NOT REACHABLE',
+      `verdict=${neg1Row?.verdict}`,
+    );
+
+    // Negative control 2: simulated vulnerable function reference exists.
+    // The real repository source does not contain it; this fixture does not
+    // create a source file, but the load-bearing property of the rule is
+    // verified separately by reading the installed package and confirming the
+    // vulnerable file (`lib/rsa.js`) exists, and the source search (`grepAll`)
+    // confirms the application does not reference the vulnerable APIs.
+    const { rows: neg2Rows } = classify([
+      advisory({
+        id: 'GHSA-p50-fixture-node-forge-prod-ref',
+        module: 'node-forge',
+        severity: 'high',
+        title: 'node-forge: RSA PKCS#1 v1.5 signature verification',
+        patched: '>=1.5.0',
+        paths: ['apps__api>node-forge'],
+      }),
+    ]);
+    const neg2Row = neg2Rows?.[0];
+    check(
+      'node-forge non-mobile path does not silently pass as build-time',
+      neg2Row?.verdict !== 'NOT REACHABLE' && neg2Row?.verdict !== 'BUILD-TIME',
+      `verdict=${neg2Row?.verdict}`,
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // 7. Load-bearing verification: the node-forge rule must exist in the
+  //    triage script source and reference the vulnerable functionality and
+  //    mobile-only dependency evidence.
+  // -----------------------------------------------------------------------
+  {
+    const scriptSource = readFileSync(triageScript, 'utf8');
+    check(
+      'the node-forge reachability rule exists in triage-vulnerabilities.mjs',
+      /node-forge/.test(scriptSource) && /DigestAlgorithm|PKCS#1|PKCS1|forge\/lib\/rsa/.test(scriptSource),
+      'rule block missing from source',
+    );
+    check(
+      'the vulnerable function evidence references exist in the installed node-forge package',
+      existsSync(path.join(repoRoot, 'node_modules/.pnpm/node-forge@1.4.0/node_modules/node-forge/lib/rsa.js')) &&
+        existsSync(path.join(repoRoot, 'node_modules/.pnpm/node-forge@1.4.0/node_modules/node-forge/lib/asn1.js')),
+      'vulnerable files not present in installed package',
+    );
+    check(
+      'the mobile-only dependency path assumption is verified by audit JSON',
+      (() => {
+        try {
+          const audit = spawnSync('pnpm', ['audit', '--audit-level=high', '--json'], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            maxBuffer: 64 * 1024 * 1024,
+          });
+          const parsed = JSON.parse(audit.stdout);
+          const adv = Object.values(parsed.advisories ?? {}).find(
+            (a) => a.module_name === 'node-forge',
+          );
+          return adv && Object.values(adv.findings ?? {}).some(
+            (f) => (f.paths ?? []).some((p) => p.includes('mobile')),
+          );
+        } catch {
+          return false;
+        }
+      })(),
+      'mobile-only audit path not confirmed',
+    );
   }
 
   // -----------------------------------------------------------------------

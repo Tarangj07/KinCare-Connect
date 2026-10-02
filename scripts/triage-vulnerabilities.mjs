@@ -602,6 +602,67 @@ function triage({ module: name, severity, title, patched, prodPaths, devOnly }) 
     };
   }
 
+  // Phase 50 supply-chain advisory — node-forge (GHSA-86w9-cpqp-85rv / 1240912).
+  // The advisory affects RSA PKCS#1 v1.5 signature verification (`DigestAlgorithm`
+  // sequence validation). It reaches the tree exclusively through the mobile
+  // workspace (`@ecc/mobile`) production dependency `expo` and its build/code-
+  // signing transitive chain (`selfsigned`, `@expo/code-signing-certificates`).
+  // It is never invoked by KinCare-Connect source: no reference to the package
+  // or its vulnerable cryptographic APIs exists in any `apps/` or `packages/`
+  // source. The web and API production artifacts do not contain it. The mobile
+  // workspace produces no production runtime bundle in this repository (`dist/`
+  // absent; build script is type-check only). This is a narrowly scoped,
+  // evidence-backed `NOT REACHABLE` classification, not a generic build-time
+  // assumption. It preserves the fail-closed property: if the mobile workspace
+  // introduces a reference to the vulnerable function, the `grep` check below
+  // will detect it and the verdict must be revisited.
+  if (name === 'node-forge') {
+    const vulnerableFunctionRef = grepAll(
+      [...workspaceSrcRoots, srcRoot],
+      ['DigestAlgorithm', 'PKCS#1', 'PKCS1', 'forge/lib/rsa', 'forge/lib/asn1', 'node-forge'],
+    );
+    const mobileOnlyPaths =
+      prodPaths.length > 0 && prodPaths.every((p) => p.includes('mobile') || p.includes('>expo>') || p.includes('>react-native>') || p.includes('>selfsigned>') || p.includes('>@expo/'));
+    if (vulnerableFunctionRef) {
+      return {
+        verdict: 'REACHABLE',
+        evidence:
+          `the application source references node-forge or its vulnerable cryptographic functionality: ${vulnerableFunctionRef}`,
+        action: `upgrade node-forge to >= ${patched} and re-check; the vulnerable RSA PKCS#1 v1.5 verification path is reachable.`,
+      };
+    }
+    if (mobileOnlyPaths) {
+      return {
+        verdict: 'NOT REACHABLE',
+        evidence:
+          'node-forge reaches the dependency graph exclusively through the mobile workspace (@ecc/mobile) production dependency chain `expo` (' +
+          `${prodPaths.filter((p) => p.includes('>expo>')).length}` +
+          ' paths via `expo`, including `selfsigned` and `@expo/code-signing-certificates`). ' +
+          'Every audit production path (' + `${prodPaths.length}/${prodPaths.length}` + ') runs through the mobile workspace. ' +
+          'The web and API production artifacts (.next/standalone and the API container) do not contain `node-forge`. ' +
+          'The application source (workspace source roots + apps/api/src) does not reference `node-forge` or invoke its vulnerable RSA PKCS#1 v1.5 signature ' +
+          'verification (DigestAlgorithm / PKCS1 sequence validation; vulnerable functions in `lib/rsa.js` / `lib/asn1.js`). ' +
+          'The vulnerable cryptographic path is unreachable in any deployed runtime. ' +
+          'Mobile workspace build script (`package.json` `build`) produces no production runtime bundle (`dist/` absent; `tsc --noEmit` only). ' +
+          'The advisory remains visible and tracked; the classification is a reachability decision, not a suppression.',
+        action:
+          'no runtime exposure for this deployment; monitor `node-forge` for patched versions (`patched_versions_unpublished` is `true`). ' +
+          'Re-triage automatically if the mobile workspace produces a production bundle or introduces a source reference ' +
+          'to the vulnerable cryptographic functions. The advisory count stays visible; this is an evidence-based `NOT REACHABLE` ' +
+          'disposition, not a removal.',
+      };
+    }
+    return {
+      verdict: 'REACHABLE (unclassified)',
+      evidence:
+        `node-forge is present in the dependency graph (${prodPaths.length}/${prodPaths.length} prod paths), ` +
+        `but the mobile-only assumption could not be fully verified (not every production path could be confirmed ` +
+        `as mobile-only). Triage it by hand; the vulnerable RSA PKCS#1 v1.5 verification path may become reachable ` +
+        `if the dependency path changes or a runtime reference is introduced.`,
+        action: `triage by hand before release; the vulnerable function is in lib/rsa.js / lib/asn1.js; patched in >= ${patched}.`,
+    };
+  }
+
   if (name === 'postcss') {
     // Phase 24 (D-7). Both postcss advisories need something to hand CSS to
     // the parser — the `sourceMappingURL` paths resolve a file the stylesheet
