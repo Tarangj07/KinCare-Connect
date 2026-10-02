@@ -362,12 +362,13 @@ describeDb('Phase 49 — senior onboarding and accessible-senior resolution (rea
       expect(list.status).toBe(200);
     });
 
-    it('care tasks remain unmounted — preserved existing behaviour (PR-48-06, out of scope)', async () => {
+    it('care tasks are mounted (Phase 50 remediation — P1 blocker)', async () => {
       const res = await http()
         .post(`/api/v1/seniors/${seniorA}/tasks`)
         .set('Authorization', auth(a))
         .send({ title: 'Refill prescriptions' });
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveProperty('id');
     });
   });
 

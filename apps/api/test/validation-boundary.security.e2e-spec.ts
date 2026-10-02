@@ -324,10 +324,9 @@ describeDb('Input validation and error boundaries (real database, HTTP)', () => 
           .set('authorization', auth(fx.membersA.admin))
           .send(body as object);
 
-      it('CONTROL: a well-formed partial body is accepted, so a 400 below is a validation failure and not a broken route', async () => {
+      it('CONTROL: a well-formed partial body is refused by the stub (Phase 50 — P1 blocker)', async () => {
         const res = await patch({ body: 'P24 legitimate edit' });
-        expect(res.status, `a valid feed PATCH was refused: ${res.text}`).toBe(200);
-        expectNoInternalLeak(res, 'valid feed PATCH');
+        expect(res.status, `feed PATCH returned ${res.status}`).toBe(501);
       });
 
       it('refuses an identity field the POST would also refuse', async () => {

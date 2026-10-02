@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, UseGuards, Req, ForbiddenException, NotFoundException, Body, Query, Param } from '@nestjs/common';
+import { Controller, Get, Patch, UseGuards, Req, ForbiddenException, NotFoundException, Body, Query, Param, HttpCode } from '@nestjs/common';
 
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -20,14 +20,12 @@ export class NotificationPreferenceController {
   @Get()
   async list(@Req() req: { user?: { sub?: string } }) {
     const userId = this.getUserId(req);
-    return { message: 'Preferences endpoint — architecture ready.', userId };
+    return { message: 'Notification preferences endpoint — architecture ready for Phase 8.', userId };
   }
 
   @Patch()
-  // Phase 24 (D-4): was an inline type literal, whose emitted metatype is
-  // `Object` — a metatype ValidationPipe skips, so this body was bound
-  // unvalidated and then echoed back.
+  @HttpCode(501)
   async update(@Body() body: UpdateNotificationPreferenceDto) {
-    return { message: 'Preference updated (stub — architecture ready for Phase 8).', body };
+    return { message: 'Notification preference updates are not implemented (stub — Phase 8).', body };
   }
 }

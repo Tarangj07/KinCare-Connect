@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Post, Req, Res, UseGuards,
+  Body, Controller, Get, Post, Req, Res, UseGuards, HttpCode,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
@@ -127,20 +127,23 @@ export class AuthController {
   @Post('forgot-password')
   @Public()
   @RateLimit()
+  @HttpCode(501)
   async forgotPassword(@Body('email') _email: string): Promise<{ message: string }> {
-    return { message: 'If an account exists with this email, a reset link was sent.' };
+    return { message: 'Password reset is not implemented. Use account registration and login.' };
   }
 
   @Post('reset-password')
   @Public()
   @RateLimit()
+  @HttpCode(501)
   async resetPassword(@Body('token') _token: string, @Body('newPassword') _newPassword: string): Promise<{ message: string }> {
-    return { message: 'Password reset completed (stub — Phase 4).' };
+    return { message: 'Password reset is not implemented.' };
   }
 
   @Post('verify-email')
   @Public()
+  @HttpCode(501)
   async verifyEmail(@Body('token') _token: string): Promise<{ message: string }> {
-    return { message: 'Email verified (stub — Phase 4).' };
+    return { message: 'Email verification is not implemented.' };
   }
 }

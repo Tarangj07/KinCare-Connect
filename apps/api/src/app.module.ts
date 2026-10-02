@@ -15,6 +15,7 @@ import { MedicationModule } from './modules/medications/medication.module';
 import { MessagingModule } from './modules/messaging/messaging.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { EmergencyModule } from './modules/emergency/emergency.module';
+import { CareTasksModule } from './modules/care-tasks/care-tasks.module';
 import { StorageModule } from './storage/storage.module';
 
 @Module({
@@ -36,6 +37,7 @@ import { StorageModule } from './storage/storage.module';
     StorageModule,
     DocumentsModule,
     EmergencyModule,
+    CareTasksModule,
     CareCircleModule,
   ],
 })

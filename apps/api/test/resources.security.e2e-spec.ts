@@ -175,12 +175,13 @@ describeDb('Senior-scoped resource authorization (real database, HTTP)', () => {
     // B2). Asserting the ACTUAL behaviour so a future wiring change has
     // to consciously update these; the stub must not silently 404 while
     // tests pretend it is live.
-    it('care-task routes are not mounted (404) even for authenticated members', async () => {
+    it('care-task routes are mounted and respond (Phase 50 remediation — P1 blocker)', async () => {
       const res = await http()
         .post(`/api/v1/seniors/${fx.seniorA}/tasks`)
         .set('Authorization', auth(fx.membersA.admin))
         .send({ title: 'Refill prescriptions' });
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveProperty('id');
     });
 
     it('unauthenticated care-task route is 401 before any route resolution', async () => {

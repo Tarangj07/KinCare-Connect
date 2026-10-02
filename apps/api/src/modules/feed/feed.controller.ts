@@ -1,6 +1,6 @@
 import {
   Body, Controller, Delete, ForbiddenException, Get, NotFoundException,
-  Param, Patch, Post, Req, UseGuards,
+  Param, Patch, Post, Req, UseGuards, HttpCode,
 } from '@nestjs/common';
 import type { Request } from 'express';
 
@@ -71,6 +71,7 @@ export class FeedController {
   }
 
   @Patch(':updateId')
+  @HttpCode(501)
   async update(
     @Param('seniorId') seniorId: string,
     @Param('updateId') updateId: string,
@@ -88,7 +89,7 @@ export class FeedController {
       throw new ForbiddenException('Only FAMILY_ADMIN or FAMILY_MEMBER can update family updates.');
     }
     // Stub for Phase 10 — full edit architecture documented but update deferred to full implementation.
-    return { message: 'Family update update endpoint — architecture ready.', seniorId, updateId };
+    return { message: 'Family update editing is not implemented (stub — Phase 10).', seniorId, updateId };
   }
 
   @Delete(':updateId')

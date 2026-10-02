@@ -119,32 +119,13 @@ describeDb('Authorization matrix (real database, HTTP)', () => {
         expect(JSON.stringify(res.body)).not.toContain('5432');
       }
     });
-    it('the care-task surface is still unmounted, so it is not live attack surface (deferred D-3)', async () => {
-      // `CareTaskController` compiles, carries JwtAuthGuard + RolesGuard and
-      // has five handlers, but no module registers it — so the route does not
-      // exist at runtime. Phase 24 kept it unmounted deliberately: mounting it
-      // would ADD live surface, and the handlers are Phase 7 placeholders
-      // that return "architecture ready".
-      //
-      // A fully authorised member of the senior's own circle is used on
-      // purpose. If the controller were ever registered, this member would
-      // pass both guards and the care-circle check, and the route would answer
-      // 200 — so a 404 here is evidence of absence, not of denial. A
-      // tokenless request would be refused with 401 by the guard whether or
-      // not the route existed, and would prove nothing.
-      for (const method of ['get', 'post', 'patch', 'delete'] as const) {
-        const agent = http();
-        const res = await agent[method](
-          `${seniorA()}/tasks${method === 'get' ? '' : '/00000000-0000-4000-8000-000000000000'}`,
-        )
-          .set('authorization', auth(fx.membersA.admin))
-          .send(method === 'post' || method === 'patch' ? { title: 'P24 mount probe' } : {});
-        expect(
-          res.status,
-          `${method.toUpperCase()} ${seniorA()}/tasks answered ${res.status}; the care-task controller appears to be ` +
-            'MOUNTED. Deferred finding D-3 has changed state — re-evaluate it before treating it as unmounted.',
-        ).toBe(404);
-      }
+    it('the care-task surface is mounted (Phase 50 remediation — P1 blocker)', async () => {
+      const agent = http();
+      const res = await agent.get(
+        `${seniorA()}/tasks`,
+      )
+        .set('authorization', auth(fx.membersA.admin));
+      expect(res.status, `GET ${seniorA()}/tasks answered ${res.status}`).toBe(200);
     });
   });
 
@@ -718,13 +699,17 @@ describeDb('Authorization matrix (real database, HTTP)', () => {
           .patch(`${seniorA()}/feed/${original.body.id}`)
           .set('authorization', auth(fx.membersA[key]))
           .send({ body: `P23 ${key} rewrite` });
-        // FAMILY_MEMBER is permitted by the role check, so the stub answers
-        // 200; CAREGIVER and OBSERVER are refused with 403.
+        // Phase 50 remediation — the feed PATCH stub now returns 501 rather
+        // than a false 200, so permitted and non-permitted members see the
+        // same non-success. The authorization boundary is still tested: the
+        // role check executes before the stub response.
         const permitted = key === 'member';
+        // The authorization check runs before the stub: permitted roles reach
+        // the stub (501); non-permitted roles are refused by the guard (403).
         expect(
           res.status,
-          `${key} editing another member's post returned ${res.status} (permitted=${permitted})`,
-        ).toBe(permitted ? 200 : 403);
+          `${key} editing another member's post returned ${res.status}`,
+        ).toBe(permitted ? 501 : 403);
 
         const after = await fx.prisma.familyUpdate.findUniqueOrThrow({ where: { id: original.body.id } });
         expect(after.body, `${key} mutated the post body`).toBe(before.body);

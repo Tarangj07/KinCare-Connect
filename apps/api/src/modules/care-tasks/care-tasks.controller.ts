@@ -7,12 +7,14 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { AuthorizationService } from '../../auth/authorization.service';
+import { CareTaskService } from './services/care-task.service';
 
 @Controller('seniors/:seniorId/tasks')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class CareTaskController {
   constructor(
     private readonly authorizationService: AuthorizationService,
+    private readonly careTaskService: CareTaskService,
   ) {}
 
   private async assertAccess(req: Request, seniorId: string): Promise<void> {
@@ -31,10 +33,10 @@ export class CareTaskController {
     await this.assertAccess(req, seniorId);
     const userId = (req as Request & { user: { sub: string } }).user.sub;
     const role = await this.authorizationService.getMemberRole(userId, seniorId);
-    if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER') {
-      throw new ForbiddenException('Only FAMILY_ADMIN or FAMILY_MEMBER can create care tasks.');
+    if (role !== 'FAMILY_ADMIN' && role !== 'FAMILY_MEMBER' && role !== 'CAREGIVER' && role !== 'DOCTOR') {
+      throw new ForbiddenException('Only FAMILY_ADMIN, FAMILY_MEMBER, CAREGIVER, or DOCTOR can create care tasks.');
     }
-    return { message: 'Task creation not yet fully implemented — architecture ready for Phase 7.', seniorId, body };
+    return this.careTaskService.create(seniorId, userId, body);
   }
 
   @Get()
@@ -43,7 +45,8 @@ export class CareTaskController {
     @Req() req: Request,
   ) {
     await this.assertAccess(req, seniorId);
-    return { message: 'Task list endpoint — architecture ready.', seniorId };
+    const userId = (req as Request & { user: { sub: string } }).user.sub;
+    return this.careTaskService.findBySenior(seniorId, userId);
   }
 
   @Get(':taskId')
@@ -53,7 +56,8 @@ export class CareTaskController {
     @Req() req: Request,
   ) {
     await this.assertAccess(req, seniorId);
-    return { message: 'Task detail endpoint — architecture ready.', seniorId, taskId };
+    const userId = (req as Request & { user: { sub: string } }).user.sub;
+    return this.careTaskService.findOne(seniorId, taskId, userId);
   }
 
   @Patch(':taskId')
@@ -69,7 +73,7 @@ export class CareTaskController {
     if (role !== 'FAMILY_ADMIN' && role !== 'CAREGIVER') {
       throw new ForbiddenException('Insufficient privileges to modify task.');
     }
-    return { message: 'Task update endpoint — architecture ready.', seniorId, taskId };
+    return this.careTaskService.update(seniorId, taskId, userId, body);
   }
 
   @Delete(':taskId')
@@ -84,6 +88,6 @@ export class CareTaskController {
     if (role !== 'FAMILY_ADMIN') {
       throw new ForbiddenException('Only FAMILY_ADMIN can cancel tasks.');
     }
-    return { message: 'Task cancelled endpoint — architecture ready.', seniorId, taskId };
+    return this.careTaskService.cancel(seniorId, taskId, userId);
   }
 }
