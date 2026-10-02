@@ -360,6 +360,112 @@ describeDb('Input validation and error boundaries (real database, HTTP)', () => 
         }
       });
     });
+    describe('the care-task body is validated, not merely bound', () => {
+      // Phase 25 remediation (SECURITY_REVIEW_PHASE_25 INFO-03): POST /tasks and
+      // PATCH /tasks/:taskId declared `@Body() body: { ... }` inline type
+      // literals. A literal erases at compile time, so the emitted metatype was
+      // `Object` — the metatype ValidationPipe skips — which meant no whitelist,
+      // no forbidNonWhitelisted, and no type/length/enum/instant enforcement on
+      // this body-carrying route. `verify:routes` reads the compiled artifact and
+      // failed on it. Both are now bound to DTO classes; the cases below are the
+      // behavioural half of that structural guarantee.
+      const ISO = '2026-05-01T09:00:00.000Z';
+
+      const createTask = (body: unknown) =>
+        http()
+          .post(`/api/v1/seniors/${fx.seniorA}/tasks`)
+          .set('authorization', auth(fx.membersA.admin))
+          .send(body as object);
+
+      let taskId: string;
+
+      it('CONTROL: a well-formed create succeeds, so the constraints are not rejecting everything', async () => {
+        const res = await createTask({
+          title: 'P25 DTO probe',
+          description: 'within the declared contract',
+          priority: 'HIGH',
+          dueAt: ISO,
+          recurrenceFrequency: 'WEEKLY',
+        });
+        expect(res.status, `a valid create was refused: ${res.text}`).toBe(201);
+        expect(UUID_V4.test(res.body.id)).toBe(true);
+        taskId = res.body.id;
+      });
+
+      it('a create refuses an undeclared property rather than stripping it', async () => {
+        const res = await createTask({ title: 'P25 probe', isPinned: true });
+        expect(res.status, `the care-task POST accepted an undeclared property: ${res.text}`).toBe(400);
+        expectNoInternalLeak(res, 'care-task POST with an undeclared property');
+      });
+
+      it('a create refuses a smuggled seniorId, so the body cannot re-target the task', async () => {
+        const res = await createTask({ title: 'P25 probe', seniorId: fx.seniorB });
+        expect(res.status, `the care-task POST accepted a smuggled seniorId: ${res.text}`).toBe(400);
+        expectNoInternalLeak(res, 'care-task POST with a smuggled seniorId');
+      });
+
+      it('a create refuses the required field being absent, empty, or the wrong type', async () => {
+        const cases: Array<[string, unknown]> = [
+          ['absent', {}],
+          ['empty', { title: '' }],
+          ['not a string', { title: 7 }],
+          ['over the declared maximum', { title: 'a'.repeat(201) }],
+        ];
+        for (const [label, body] of cases) {
+          const res = await createTask(body);
+          expect(res.status, `the care-task POST accepted a title that is ${label}: ${res.text}`).toBe(400);
+          expectNoInternalLeak(res, `care-task POST with a title that is ${label}`);
+        }
+      });
+
+      it('a create refuses an enum value outside the Prisma domain', async () => {
+        const res = await createTask({ title: 'P25 probe', priority: 'NOT_A_PRIORITY' });
+        expect(res.status, `the care-task POST accepted an invalid priority: ${res.text}`).toBe(400);
+        expectNoInternalLeak(res, 'care-task POST with an invalid priority');
+      });
+
+      it('a create refuses an impossible but well-formed dueAt (the Phase 23 W4 rule)', async () => {
+        const res = await createTask({ title: 'P25 probe', dueAt: '2026-02-30T00:00:00.000Z' });
+        expect(res.status, `the care-task POST accepted an impossible dueAt: ${res.text}`).toBe(400);
+        expectNoInternalLeak(res, 'care-task POST with an impossible dueAt');
+      });
+
+      const patchTask = (body: unknown) =>
+        http()
+          .patch(`/api/v1/seniors/${fx.seniorA}/tasks/${taskId}`)
+          .set('authorization', auth(fx.membersA.admin))
+          .send(body as object);
+
+      it('CONTROL: a well-formed update succeeds and persists', async () => {
+        const res = await patchTask({ title: 'P25 updated', status: 'COMPLETED' });
+        expect(res.status, `a valid update was refused: ${res.text}`).toBe(200);
+        const after = await fx.prisma.careTask.findUniqueOrThrow({ where: { id: taskId } });
+        expect(after.title).toBe('P25 updated');
+      });
+
+      it('an update refuses an undeclared property, and the task is left untouched', async () => {
+        const before = await fx.prisma.careTask.findUniqueOrThrow({ where: { id: taskId } });
+        const res = await patchTask({ title: 'P25 rewrite', seniorId: fx.seniorB });
+        expect(res.status, `the care-task PATCH accepted a smuggled seniorId: ${res.text}`).toBe(400);
+        expectNoInternalLeak(res, 'care-task PATCH with a smuggled seniorId');
+        const after = await fx.prisma.careTask.findUniqueOrThrow({ where: { id: taskId } });
+        expect(after.title, 'a refused PATCH still changed the task title').toBe(before.title);
+        expect(after.seniorId, 'a refused PATCH still changed the task senior').toBe(before.seniorId);
+      });
+
+      it('an update refuses an invalid status enum and a wrong-typed field', async () => {
+        const cases: Array<[string, unknown]> = [
+          ['an invalid status', { status: 'NOT_A_STATUS' }],
+          ['a non-string title', { title: { nested: 'object' } }],
+          ['an over-length description', { description: 'x'.repeat(2001) }],
+        ];
+        for (const [label, body] of cases) {
+          const res = await patchTask(body);
+          expect(res.status, `the care-task PATCH accepted ${label}: ${res.text}`).toBe(400);
+          expectNoInternalLeak(res, `care-task PATCH with ${label}`);
+        }
+      });
+    });
   });
 
   // ---------------------------------------------------------------------
